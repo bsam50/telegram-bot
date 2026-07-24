@@ -68,7 +68,29 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
 
     if text in replies:
-        await update.message.reply_text(replies[text])
+  users = set()
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    await update.message.reply_text(f"عدد المستخدمين: {len(users)}")
+
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("help", helpcmd))
+async def helpcmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    await update.message.reply_text("""
+أوامر المالك:
+
+/addreply السؤال | الرد
+/delreply السؤال
+/listreply
+/stats
+/help
+""")      await update.message.reply_text(replies[text])
 
 app = Application.builder().token(TOKEN).build()
 
