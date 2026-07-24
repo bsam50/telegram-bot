@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 
 TOKEN = "8710417677:AAFUU6IXbb1wbWckf0F1Py-ua4D29qMOw0U"
-OWNER_ID = 8710417677  
+OWNER_ID = 8476500086 
 
 # الردود
 replies = {
