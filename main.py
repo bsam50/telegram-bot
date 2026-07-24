@@ -68,6 +68,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
 
     if text in replies:
+        await update.message.reply_text(replies[text])
   
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -89,8 +90,8 @@ async def helpcmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /delreply السؤال
 /listreply
 /stats
-/help
-""")      await update.message.reply_text(replies[text])
+
+""")      
 
 app = Application.builder().token(TOKEN).build()
 
