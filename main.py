@@ -9,7 +9,7 @@ from telegram.ext import (
 
 TOKEN = "8710417677:AAFUU6IXbb1wbWckf0F1Py-ua4D29qMOw0U"
 OWNER_ID = 8476500086 
-
+users = set()
 # الردود
 replies = {
     "السلام عليكم": "وعليكم السلام ورحمة الله وبركاته",
@@ -68,7 +68,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
 
     if text in replies:
-  users = set()
+  
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
