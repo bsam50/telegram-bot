@@ -17,7 +17,10 @@ replies = {
     "كيفك": "الحمد لله بخير، وأنت؟ 😊",
     "كيف الحال": "الحمد لله بخير، وأنت؟ 😊",
 }
-
+jokes = [
+    "😂 نكتتي الأولى",
+    "🤣 نكتتي الثانية"
+]
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
@@ -66,6 +69,14 @@ async def listreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
+
+    if text == "نكتة" or text == "ضحكني":
+        if jokes:
+            import random
+            await update.message.reply_text(random.choice(jokes))
+        else:
+            await update.message.reply_text("لا توجد نكت حالياً 😂")
+        return
 
     if text in replies:
         await update.message.reply_text(replies[text])
