@@ -22,6 +22,8 @@ jokes = [
     "🤣 نكتتي الثانية"
 ]
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    users.add(update.effective_user.id)
+
     await update.message.reply_text(
         f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
         "نورت البوت ❤️"
@@ -87,7 +89,35 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(f"عدد المستخدمين: {len(users)}")
+async def userscmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
 
+    if not users:
+        await update.message.reply_text("لا يوجد مستخدمون.")
+        return
+
+    text = "\n".join(str(user) for user in users) 
+    await update.message.reply_text(f"المستخدمون:\n\n{text}")
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("الاستخدام:\n/broadcast الرسالة")
+        return
+
+    message = " ".join(context.args)
+
+    sent = 0
+    for user in users:
+        try:
+            await context.bot.send_message(chat_id=user, text=message)
+            sent += 1
+        except:
+            pass
+
+    await update.message.reply_text(f"✅ تم إرسال الرسالة إلى {sent} مستخدم.")
 async def addjoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -110,7 +140,8 @@ async def helpcmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /delreply السؤال
 /listreply
 /stats
-
+/users
+/broadcast الرسالة
 """)      
 
 app = Application.builder().token(TOKEN).build()
@@ -121,6 +152,8 @@ app.add_handler(CommandHandler("delreply", delreply))
 app.add_handler(CommandHandler("listreply", listreply))
 app.add_handler(CommandHandler("addjoke", addjoke))
 app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("users", userscmd))
+app.add_handler(CommandHandler("broadcast", broadcast))
 app.add_handler(CommandHandler("help", helpcmd))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
 
