@@ -88,7 +88,17 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"عدد المستخدمين: {len(users)}")
 
+async def addjoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
 
+    if not context.args:
+        await update.message.reply_text("الاستخدام:\n/addjoke النكتة")
+        return
+
+    joke = " ".join(context.args)
+    jokes.append(joke)
+    await update.message.reply_text("✅ تم إضافة النكتة.")
 async def helpcmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -109,6 +119,7 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("addreply", addreply))
 app.add_handler(CommandHandler("delreply", delreply))
 app.add_handler(CommandHandler("listreply", listreply))
+app.add_handler(CommandHandler("addjoke", addjoke))
 app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("help", helpcmd))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
