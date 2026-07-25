@@ -77,8 +77,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"عدد المستخدمين: {len(users)}")
 
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("help", helpcmd))
+
 async def helpcmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -99,6 +98,8 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("addreply", addreply))
 app.add_handler(CommandHandler("delreply", delreply))
 app.add_handler(CommandHandler("listreply", listreply))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("help", helpcmd))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply))
 
 app.run_polling()
