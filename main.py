@@ -48,7 +48,6 @@ answer = answer.strip()
 
 if question not in replies:
     replies[question] = []
-
 replies[question].append(answer)
 await update.message.reply_text("✅ تم إضافة الرد.")
 
