@@ -43,14 +43,16 @@ async def addreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question, answer = text.split("|", 1)
-    question = question.strip().lower()
+
+question = question.strip().lower()
 answer = answer.strip()
 
 if question not in replies:
     replies[question] = []
-replies[question].append(answer)
-await update.message.reply_text("✅ تم إضافة الرد.")
 
+replies[question].append(answer)
+
+await update.message.reply_text("✅ تم إضافة الرد.")
 async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
