@@ -82,7 +82,6 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "نكتة" or text == "ضحكني":
         if jokes:
-            import random
             await update.message.reply_text(random.choice(jokes))
         else:
             await update.message.reply_text("لا توجد نكت حالياً 😂")
