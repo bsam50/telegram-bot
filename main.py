@@ -12,10 +12,10 @@ OWNER_ID = 8476500086
 users = set()
 # الردود
 replies = {
-    "السلام عليكم": "وعليكم السلام ورحمة الله وبركاته",
-    "سلام عليكم": "وعليكم السلام ورحمة الله وبركاته",
-    "كيفك": "الحمد لله بخير، وأنت؟ 😊",
-    "كيف الحال": "الحمد لله بخير، وأنت؟ 😊",
+    "السلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
+    "سلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
+    "كيفك": ["الحمد لله بخير، وأنت؟ 😊"],
+    "كيف الحال": ["الحمد لله بخير، وأنت؟ 😊"],
 }
 jokes = [
     "😂 نكتتي الأولى",
@@ -43,7 +43,13 @@ async def addreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question, answer = text.split("|", 1)
-    replies[question.strip().lower()] = answer.strip()
+    question = question.strip().lower()
+answer = answer.strip()
+
+if question not in replies:
+    replies[question] = []
+
+replies[question].append(answer)
     await update.message.reply_text("✅ تم إضافة الرد.")
 
 async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,7 +87,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text in replies:
-        await update.message.reply_text(replies[text])
+        await update.message.reply_text(random.choice(replies[text]))
   
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
