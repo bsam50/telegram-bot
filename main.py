@@ -50,7 +50,7 @@ if question not in replies:
     replies[question] = []
 
 replies[question].append(answer)
-    await update.message.reply_text("✅ تم إضافة الرد.")
+await update.message.reply_text("✅ تم إضافة الرد.")
 
 async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
