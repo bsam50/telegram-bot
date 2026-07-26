@@ -1,3 +1,4 @@
+import random
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -78,13 +79,13 @@ async def listreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("الردود:\n\n" + text)
 
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text.strip().lower()
 
     if text == "نكتة" or text == "ضحكني":
-        if jokes:
-            await update.message.reply_text(random.choice(jokes))
-        else:
-            await update.message.reply_text("لا توجد نكت حالياً 😂")
+        await update.message.reply_text(random.choice(jokes))
         return
 
     if text in replies:
