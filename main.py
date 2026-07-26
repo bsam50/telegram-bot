@@ -102,7 +102,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip().lower()
 
-    if text =="نكته" or text == "ضحكني":
+    if text in ["نكته", "نكتة", "ضحكني"]:
         await update.message.reply_text(random.choice(jokes))
         return
 
