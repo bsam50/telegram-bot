@@ -38,21 +38,22 @@ async def addreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = " ".join(context.args)
+
     if "|" not in text:
         await update.message.reply_text("اكتب بالشكل:\n/addreply السؤال | الرد")
         return
 
     question, answer = text.split("|", 1)
 
-question = question.strip().lower()
-answer = answer.strip()
+    question = question.strip().lower()
+    answer = answer.strip()
 
-if question not in replies:
-    replies[question] = []
+    if question not in replies:
+        replies[question] = []
 
-replies[question].append(answer)
+    replies[question].append(answer)
 
-await update.message.reply_text("✅ تم إضافة الرد.")
+    await update.message.reply_text("✅ تم إضافة الرد.")
 async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
