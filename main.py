@@ -15,9 +15,15 @@ users = set()
 replies = {
     "السلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
     "سلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
-    "كيفك": ["الحمد لله بخير، وأنت؟ 😊"],
-    "كيف الحال": ["الحمد لله بخير، وأنت؟ 😊"],
+    "كيفك": ["الحمد لله بخير وأنت😊"],
+    "كيف الحال": ["الحمد لله بخير وأنت😊"],
 }
+
+replies = load_json("replies.json", replies)
+users = set(load_json("users.json", []))
+groups = set(load_json("groups.json", []))
+reply_state = {}
+
 jokes = [
     "😂 فيه اثنين مشوا سوا... رجعوا موبايلي.",
     "🤣 فيه نملة ماسكة عود أسنان... ليه؟ ترقص إماراتي.",
@@ -42,37 +48,28 @@ jokes = [
 ]
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_user.id)
+save_json("users.json", list(users))
 
-    await update.message.reply_text(
-        f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
-        "نورت البوت ❤️"
-    )
+if update.effective_chat.type in ["group", "supergroup"]:
+    groups.add(update.effective_chat.id)
+    save_json("groups.json", list(groups))
+
+await update.message.reply_text(
+    f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
+    "نورت البوت ❤️"
+)
 
 async def addreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
 
-    if len(context.args) < 2:
-        await update.message.reply_text("الاستخدام:\n/addreply السؤال | الرد")
-        return
+    reply_state[update.effective_user.id] = {
+        "step": "question"
+    }
 
-    text = " ".join(context.args)
-
-    if "|" not in text:
-        await update.message.reply_text("اكتب بالشكل:\n/addreply السؤال | الرد")
-        return
-
-    question, answer = text.split("|", 1)
-
-    question = question.strip().lower()
-    answer = answer.strip()
-
-    if question not in replies:
-        replies[question] = []
-
-    replies[question].append(answer)
-
-    await update.message.reply_text("✅ تم إضافة الرد.")
+    await update.message.reply_text(
+        "✏️ أرسل الكلمة أو السؤال الذي تريد إضافة رد له."
+    )
 async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -81,6 +78,7 @@ async def delreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if key in replies:
         del replies[key]
+        save_json("replies.json", replies)
         await update.message.reply_text("🗑 تم حذف الرد.")
     else:
         await update.message.reply_text("❌ الرد غير موجود.")
@@ -99,7 +97,37 @@ async def listreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
+async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
 
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    if user_id in reply_state:
+        state = reply_state[user_id]
+
+        if state["step"] == "question":
+            state["question"] = text.lower()
+            state["step"] = "answer"
+            await update.message.reply_text("💬 الآن أرسل الرد.")
+            return
+
+        elif state["step"] == "answer":
+            question = state["question"]
+
+            if question not in replies:
+                replies[question] = []
+
+            replies[question].append(text)
+            save_json("replies.json", replies)
+
+            del reply_state[user_id]
+
+            await update.message.reply_text("✅ تم حفظ الرد بنجاح.")
+            return
+
+    text = update.message.text.strip().lower()
     text = update.message.text.strip().lower()
 
     if text in ["نكته", "نكتة", "ضحكني"]:
