@@ -116,13 +116,13 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    text = update.message.text.strip()
+    text = update.message.text.strip().lower()
 
     if user_id in reply_state:
         state = reply_state[user_id]
 
         if state["step"] == "question":
-            state["question"] = text.lower()
+            state["question"] = text
             state["step"] = "answer"
             await update.message.reply_text("💬 الآن أرسل الرد.")
             return
@@ -130,19 +130,13 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state["step"] == "answer":
             question = state["question"]
 
-            if question not in replies:
-                replies[question] = []
-
-            replies[question].append(text)
+            replies[question] = [text]
             save_json("replies.json", replies)
 
             del reply_state[user_id]
 
-            await update.message.reply_text("✅ تم حفظ الرد بنجاح.")
+            await update.message.reply_text("✅ تم حفظ الرد.")
             return
-
-    text = update.message.text.strip().lower()
-    text = update.message.text.strip().lower()
 
     if text in ["نكته", "نكتة", "ضحكني"]:
         await update.message.reply_text(random.choice(jokes))
@@ -150,6 +144,7 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in replies:
         await update.message.reply_text(random.choice(replies[text]))
+        return
   
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
