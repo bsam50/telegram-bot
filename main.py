@@ -128,18 +128,18 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         elif state["step"] == "answer":
-            question = state["question"]
+    question = state["question"]
 
-            if question not in replies:
-    replies[question] = []
+    if question not in replies:
+        replies[question] = []
 
-replies[question].append(text)
-            save_json("replies.json", replies)
+    replies[question].append(text)
+    save_json("replies.json", replies)
 
-            del reply_state[user_id]
+    del reply_state[user_id]
 
-            await update.message.reply_text("✅ تم حفظ الرد.")
-            return
+    await update.message.reply_text("✅ تم حفظ الرد.")
+    return
 
     if text in ["نكته", "نكتة", "ضحكني"]:
         await update.message.reply_text(random.choice(jokes))
