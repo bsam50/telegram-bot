@@ -127,7 +127,11 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("💬 الآن أرسل الرد.")
             return
 
-        elif state["step"] == "answer":
+        if state["step"] == "question":
+    ...
+    return
+
+elif state["step"] == "answer":
     question = state["question"]
 
     if question not in replies:
@@ -141,7 +145,8 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ تم حفظ الرد.")
     return
 
-    if text in ["نكته", "نكتة", "ضحكني"]:
+if text in ["نكته", "نكتة", "ضحكني"]:
+    ...
         await update.message.reply_text(random.choice(jokes))
         return
 
