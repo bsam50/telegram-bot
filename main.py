@@ -130,7 +130,10 @@ async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state["step"] == "answer":
             question = state["question"]
 
-            replies[question] = [text]
+            if question not in replies:
+    replies[question] = []
+
+replies[question].append(text)
             save_json("replies.json", replies)
 
             del reply_state[user_id]
