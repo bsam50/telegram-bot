@@ -1,4 +1,6 @@
 import random
+import json
+import os
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -11,6 +13,21 @@ from telegram.ext import (
 TOKEN = "8710417677:AAFUU6IXbb1wbWckf0F1Py-ua4D29qMOw0U"
 OWNER_ID = 8476500086 
 users = set()
+def load_json(filename, default):
+    import os
+    import json
+
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return default
+
+
+def save_json(filename, data):
+    import json
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 # الردود
 replies = {
     "السلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
@@ -48,16 +65,16 @@ jokes = [
 ]
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_user.id)
-save_json("users.json", list(users))
+    save_json("users.json", list(users))
 
-if update.effective_chat.type in ["group", "supergroup"]:
-    groups.add(update.effective_chat.id)
-    save_json("groups.json", list(groups))
+    if update.effective_chat.type in ["group", "supergroup"]:
+        groups.add(update.effective_chat.id)
+        save_json("groups.json", list(groups))
 
-await update.message.reply_text(
-    f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
-    "نورت البوت ❤️"
-)
+    await update.message.reply_text(
+        f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
+        "نورت البوت ❤️"
+    )
 
 async def addreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -93,10 +110,7 @@ async def listreply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "\n".join(replies.keys())
     await update.message.reply_text("الردود:\n\n" + text)
-
-async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
+        
 async def reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
