@@ -21,5 +21,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from .misc import paginate_modules  # noqa: F401
-from .read_lines import random_line  # noqa: F401
+from random import choice
+
+
+async def random_line(fname):
+    with open(fname) as f:
+        data = f.read().splitlines()
+    return choice(data)

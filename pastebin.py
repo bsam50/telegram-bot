@@ -21,5 +21,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from .misc import paginate_modules  # noqa: F401
-from .read_lines import random_line  # noqa: F401
+from wbb.utils.http import post
+
+BASE = "https://batbin.me/"
+
+
+async def paste(content: str):
+    resp = await post(f"{BASE}api/v2/paste", data=content)
+    if not resp["success"]:
+        return
+    return BASE + resp["message"]
