@@ -21,20 +21,35 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from functools import wraps
-from time import time
+from pykeyboard import InlineKeyboard
+from pyrogram.types import InlineKeyboardButton as Ikb
+
+from wbb.utils.functions import get_urls_from_text as is_url
 
 
-def exec_time(func):
-    @wraps(func)
-    async def _time_it(*args, **kwargs):
-        t1 = time()
-        try:
-            return await func(*args, **kwargs)
-        finally:
-            t2 = time()
-            total = t2 - t1
-            total = round(total, 3)
-            print(f"{func.__name__} Took: {total} Seconds")
+def keyboard(buttons_list, row_width: int = 2):
+    """
+    Buttons builder, pass buttons in a list and it will
+    return pyrogram.types.IKB object
+    Ex: keyboard([["click here", "https://google.com"]])
+    if theres, a url, it will make url button, else callback button
+    """
+    buttons = InlineKeyboard(row_width=row_width)
+    data = [
+        (
+            Ikb(text=str(i[0]), callback_data=str(i[1]))
+            if not is_url(i[1])
+            else Ikb(text=str(i[0]), url=str(i[1]))
+        )
+        for i in buttons_list
+    ]
+    buttons.add(*data)
+    return buttons
 
-    return _time_it
+
+def ikb(data: dict, row_width: int = 2):
+    """
+    Converts a dict to pyrogram buttons
+    Ex: dict_to_keyboard({"click here": "this is callback data"})
+    """
+    return keyboard(data.items(), row_width=row_width)

@@ -21,20 +21,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-from functools import wraps
-from time import time
+
+n = "\n"
+w = " "
+
+bold = lambda x: f"**{x}:** "
+bold_ul = lambda x: f"**--{x}:**-- "
+
+mono = lambda x: f"`{x}`{n}"
 
 
-def exec_time(func):
-    @wraps(func)
-    async def _time_it(*args, **kwargs):
-        t1 = time()
-        try:
-            return await func(*args, **kwargs)
-        finally:
-            t2 = time()
-            total = t2 - t1
-            total = round(total, 3)
-            print(f"{func.__name__} Took: {total} Seconds")
+def section(
+    title: str,
+    body: dict,
+    indent: int = 2,
+    underline: bool = False,
+) -> str:
+    text = (bold_ul(title) + n) if underline else bold(title) + n
 
-    return _time_it
+    for key, value in body.items():
+        if value is not None:
+            text += (
+                indent * w
+                + bold(key)
+                + (
+                    (value[0] + n)
+                    if isinstance(value, list) and isinstance(value[0], str)
+                    else mono(value)
+                )
+            )
+    return text
