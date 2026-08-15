@@ -1,8 +1,0 @@
-services:
-  wbb:
-    build: .
-    restart: always
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./sessions:/wbb/sessions
