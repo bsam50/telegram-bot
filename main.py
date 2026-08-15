@@ -1,8 +1,10 @@
 import os
 import json
 import random
+import logging
+from datetime import timedelta
 
-from telegram import Update, ChatPermissions
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,20 +13,19 @@ from telegram.ext import (
     filters,
 )
 
-# =========================================================
-# الإعدادات
-# =========================================================
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
 TOKEN = os.getenv("BOT_TOKEN")
-
-# ID مالك البوت
-OWNER_ID = 8476500086
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN غير موجود في Railway")
+    raise RuntimeError("BOT_TOKEN غير موجود في متغيرات البيئة")
 
 # =========================================================
-# حفظ وتحميل البيانات
+# الملفات
 # =========================================================
 
 def load_json(filename, default):
@@ -34,65 +35,38 @@ def load_json(filename, default):
                 return json.load(f)
         except Exception:
             return default
-
     return default
 
 
 def save_json(filename, data):
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(
-            data,
-            f,
-            ensure_ascii=False,
-            indent=4
-        )
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 
-# =========================================================
-# البيانات
-# =========================================================
-
-users = set(
-    load_json("users.json", [])
-)
-
-groups = set(
-    load_json("groups.json", [])
-)
-
-sudo_users = set(
-    load_json("sudo_users.json", [])
-)
-
-reply_state = {}
-
-
-# =========================================================
-# الردود
-# =========================================================
-
-default_replies = {
-    "السلام عليكم": [
-        "وعليكم السلام ورحمة الله وبركاته"
-    ],
-
-    "سلام عليكم": [
-        "وعليكم السلام ورحمة الله وبركاته"
-    ],
-
-    "كيفك": [
-        "الحمد لله بخير وأنت😊"
-    ],
-
-    "كيف الحال": [
-        "الحمد لله بخير وأنت😊"
-    ],
-}
+users = set(load_json("users.json", []))
+groups = set(load_json("groups.json", []))
 
 replies = load_json(
     "replies.json",
-    default_replies
+    {
+        "السلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
+        "سلام عليكم": ["وعليكم السلام ورحمة الله وبركاته"],
+        "كيفك": ["الحمد لله بخير وأنت 😊"],
+        "كيف الحال": ["الحمد لله بخير وأنت 😊"],
+    },
 )
+
+# الرتب الخاصة بكل مجموعة
+ranks = load_json("ranks.json", {})
+
+# التحذيرات
+warnings = load_json("warnings.json", {})
+
+# إعدادات بسيطة
+settings = load_json("settings.json", {})
+
+# حالة إضافة الرد
+reply_state = {}
 
 
 # =========================================================
@@ -112,727 +86,917 @@ jokes = [
     "🤣 فيه سمكة طلعت البر... قالت: يا ليتني ما طلعت.",
     "😂 فيه واحد دخل مطعم وسأل: عندكم رز؟ قالوا: نعم، قال: سلموا عليه.",
     "🤣 فيه واحد راح للدكتور قال: كل ما أشرب شاي توجعني عيني، قال: شيل الملعقة من الكوب.",
-    "😂 فيه واحد بخيل إذا عطس قال: الحمد لله... وخلاص.",
-    "🤣 فيه واحد اشترى مروحة... زعل لأنها ما تطير.",
 ]
 
 
 # =========================================================
-# الصلاحيات
+# الرتب
 # =========================================================
 
-def is_owner(user_id):
-    return user_id == OWNER_ID
+RANKS = [
+    "مالك اساسي",
+    "مالك",
+    "منشئ",
+    "مدير",
+    "ادمن",
+    "مميز",
+]
+
+RANK_LEVEL = {
+    "عضو": 0,
+    "مميز": 1,
+    "ادمن": 2,
+    "مدير": 3,
+    "منشئ": 4,
+    "مالك": 5,
+    "مالك اساسي": 6,
+}
 
 
-def is_sudo(user_id):
-    return (
-        user_id == OWNER_ID
-        or user_id in sudo_users
-    )
+def group_key(chat_id):
+    return str(chat_id)
 
 
-async def is_group_admin(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    if not update.effective_chat:
+def get_group_ranks(chat_id):
+    key = group_key(chat_id)
+
+    if key not in ranks:
+        ranks[key] = {
+            "مالك اساسي": [],
+            "مالك": [],
+            "منشئ": [],
+            "مدير": [],
+            "ادمن": [],
+            "مميز": [],
+        }
+
+    return ranks[key]
+
+
+def save_ranks():
+    save_json("ranks.json", ranks)
+
+
+def get_user_rank(chat_id, user_id):
+    # المالك الأساسي العام
+    if user_id == OWNER_ID:
+        return "مالك اساسي"
+
+    data = get_group_ranks(chat_id)
+
+    for rank in RANKS:
+        if user_id in data.get(rank, []):
+            return rank
+
+    return "عضو"
+
+
+def rank_level(rank):
+    return RANK_LEVEL.get(rank, 0)
+
+
+def can_manage(chat_id, user_id, required_rank="ادمن"):
+    user_rank = get_user_rank(chat_id, user_id)
+    return rank_level(user_rank) >= rank_level(required_rank)
+
+
+# =========================================================
+# التحقق من المشرف الحقيقي في تيليجرام
+# =========================================================
+
+async def is_real_admin(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not chat or chat.type not in ("group", "supergroup"):
         return False
 
-    if update.effective_chat.type not in (
-        "group",
-        "supergroup"
-    ):
-        return False
+    if user.id == OWNER_ID:
+        return True
 
     try:
-        member = await context.bot.get_chat_member(
-            update.effective_chat.id,
-            update.effective_user.id
-        )
-
-        return member.status in (
-            "administrator",
-            "creator"
-        )
-
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        return member.status in ("administrator", "creator")
     except Exception:
         return False
 
 
-async def can_manage(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    if is_sudo(update.effective_user.id):
-        return True
-
-    return await is_group_admin(
-        update,
-        context
-    )
+async def bot_is_admin(update, context):
+    try:
+        member = await context.bot.get_chat_member(
+            update.effective_chat.id,
+            context.bot.id,
+        )
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
 
 
-async def target_from_reply(update: Update):
+# =========================================================
+# معرفة العضو المستهدف بالرد
+# =========================================================
 
-    if (
-        not update.message
-        or not update.message.reply_to_message
-    ):
+async def get_target(update):
+    if not update.message:
         return None
 
-    return update.message.reply_to_message.from_user
+    if update.message.reply_to_message:
+        return update.message.reply_to_message.from_user
+
+    return None
 
 
 # =========================================================
-# START
+# /start
 # =========================================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
 
-    user_id = update.effective_user.id
+    users.add(user.id)
+    save_json("users.json", list(users))
 
-    users.add(user_id)
-
-    save_json(
-        "users.json",
-        list(users)
-    )
-
-    if update.effective_chat.type in (
-        "group",
-        "supergroup"
-    ):
-
-        groups.add(
-            update.effective_chat.id
-        )
-
-        save_json(
-            "groups.json",
-            list(groups)
-        )
+    if chat.type in ("group", "supergroup"):
+        groups.add(chat.id)
+        save_json("groups.json", list(groups))
 
     await update.message.reply_text(
-        f"أهلاً وسهلاً {update.effective_user.first_name} 🌹\n"
-        "نورت البوت ❤️"
+        f"أهلاً وسهلاً {user.first_name} 🌹\n"
+        "نورت البوت ❤️\n\n"
+        "اكتب: الاوامر"
     )
 
 
 # =========================================================
-# SUDO
+# قائمة الأوامر الرئيسية
 # =========================================================
 
-async def addsudo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
 
-    if not is_owner(
-        update.effective_user.id
-    ):
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text(
+            "⚠️ هذا الأمر خاص بالمجموعات."
+        )
         return
 
-    target = await target_from_reply(update)
+    rank = get_user_rank(chat.id, user.id)
 
-    if target:
-
-        user_id = target.id
-
-    elif context.args:
-
-        try:
-            user_id = int(
-                context.args[0]
-            )
-
-        except ValueError:
-
-            await update.message.reply_text(
-                "❌ أرسل ID صحيح."
-            )
-
-            return
-
+    if rank_level(rank) >= 2:
+        text = """
+‌‌‏أهلاً بك عزيزي في قائمة الاوامر :
+━━━━━━━━━━━━
+◂ م1 : اوامر الادمنيه
+◂ م2 : اوامر الاعدادات
+◂ م3 : اوامر القفل - الفتح
+◂ م4 : اوامر التسليه
+◂ م6 : الاوامر الخدميه
+━━━━━━━━━━━━
+"""
     else:
+        text = """
+‌‌‏أهلاً بك عزيزي في قائمة الاوامر :
+━━━━━━━━━━━━
+◂ م4 : اوامر التسليه
+◂ م6 : الاوامر الخدميه
+━━━━━━━━━━━━
+"""
 
-        await update.message.reply_text(
-            "👑 رد على رسالة المستخدم واكتب:\n"
-            "/addsudo"
-        )
+    await update.message.reply_text(text)
 
+
+# =========================================================
+# م1
+# =========================================================
+
+async def m1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.type not in ("group", "supergroup"):
         return
 
-    sudo_users.add(user_id)
+    rank = get_user_rank(chat.id, user.id)
 
-    save_json(
-        "sudo_users.json",
-        list(sudo_users)
-    )
+    if rank_level(rank) < 2:
+        await update.message.reply_text(
+            "❌ هذا القسم خاص بالأدمنية والمشرفين."
+        )
+        return
+
+    text = """
+👮 قائمة اوامر الادمنيه
+━━━━━━━━━━━━
+
+• اوامر الرفع والتنزيل :
+
+رفع / تنزيل مالك اساسي
+رفع / تنزيل مالك
+رفع / تنزيل منشئ
+رفع / تنزيل مدير
+رفع / تنزيل ادمن
+رفع / تنزيل مميز
+تنزيل الكل
+
+• اوامر المسح :
+
+مسح الكل
+مسح المنشئين
+مسح المدراء
+مسح المالكين
+مسح الادمنيه
+مسح المميزين
+مسح المحظورين
+مسح المكتومين
+مسح قائمه المنع
+مسح الردود
+مسح الاوامر المضافه
+مسح + عدد
+مسح بالرد
+مسح الايدي
+مسح الترحيب
+مسح الرابط
+
+• اوامر الطرد والحظر :
+
+تقييد
+حظر
+طرد
+كتم
+الغاء الحظر
+الغاء الكتم
+فك التقييد
+رفع القيود
+منع بالرد
+الغاء منع بالرد
+طرد البوتات
+طرد المحذوفين
+كشف البوتات
+━━━━━━━━━━━━
+"""
+
+    await update.message.reply_text(text)
+
+
+# =========================================================
+# رفع رتبة
+# =========================================================
+
+async def promote_rank(update, context, rank):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if rank not in RANKS:
+        return
+
+    if not can_manage(chat.id, user.id, rank):
+        await update.message.reply_text(
+            "❌ رتبتك لا تسمح لك برفع هذه الرتبة."
+        )
+        return
+
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد على رسالة الشخص."
+        )
+        return
+
+    if target.id == user.id:
+        await update.message.reply_text(
+            "❌ لا يمكنك رفع رتبتك بنفسك."
+        )
+        return
+
+    target_rank = get_user_rank(chat.id, target.id)
+
+    if rank_level(target_rank) >= rank_level(rank):
+        await update.message.reply_text(
+            "❌ رتبة الشخص أعلى أو مساوية لهذه الرتبة."
+        )
+        return
+
+    data = get_group_ranks(chat.id)
+
+    # إزالة العضو من جميع الرتب
+    for r in RANKS:
+        if target.id in data[r]:
+            data[r].remove(target.id)
+
+    data[rank].append(target.id)
+    save_ranks()
 
     await update.message.reply_text(
-        f"👑 تم إضافة المستخدم {user_id} إلى قائمة المالكين المساعدين."
-    )
-
-
-async def delsudo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
-        return
-
-    target = await target_from_reply(update)
-
-    if target:
-
-        user_id = target.id
-
-    elif context.args:
-
-        try:
-            user_id = int(
-                context.args[0]
-            )
-
-        except ValueError:
-
-            await update.message.reply_text(
-                "❌ ID غير صحيح."
-            )
-
-            return
-
-    else:
-
-        await update.message.reply_text(
-            "👑 رد على رسالة المستخدم واكتب:\n"
-            "/delsudo"
-        )
-
-        return
-
-    sudo_users.discard(user_id)
-
-    save_json(
-        "sudo_users.json",
-        list(sudo_users)
-    )
-
-    await update.message.reply_text(
-        "✅ تم إزالة المستخدم من قائمة المالكين المساعدين."
-    )
-
-
-async def listsudo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_sudo(
-        update.effective_user.id
-    ):
-        return
-
-    if not sudo_users:
-
-        await update.message.reply_text(
-            "لا يوجد مالكون مساعدون."
-        )
-
-        return
-
-    text = "\n".join(
-        str(x)
-        for x in sudo_users
-    )
-
-    await update.message.reply_text(
-        "👑 المالكين المساعدين:\n\n"
-        + text
+        f"✅ تم رفع {target.first_name} إلى رتبة: {rank}"
     )
 
 
 # =========================================================
-# أوامر الإدارة بالعربي
+# تنزيل رتبة
 # =========================================================
 
-async def arabic_admin(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def demote_rank(update, context, rank):
+    chat = update.effective_chat
+    user = update.effective_user
 
-    if not update.message:
+    if not can_manage(chat.id, user.id, rank):
+        await update.message.reply_text(
+            "❌ رتبتك لا تسمح لك بتنزيل هذه الرتبة."
+        )
         return
 
-    if not update.message.text:
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد على رسالة الشخص."
+        )
         return
 
-    text = (
-        update.message.text
-        .strip()
-        .lower()
+    target_rank = get_user_rank(chat.id, target.id)
+
+    if target_rank != rank:
+        await update.message.reply_text(
+            f"❌ الشخص ليس برتبة {rank}."
+        )
+        return
+
+    data = get_group_ranks(chat.id)
+    data[rank].remove(target.id)
+
+    save_ranks()
+
+    await update.message.reply_text(
+        f"✅ تم تنزيل رتبة {target.first_name}."
     )
 
-    commands = [
-        "حظر",
-        "فك حظر",
-        "طرد",
-        "كتم",
-        "فك كتم",
-        "ترقية",
-        "تنزيل",
-        "تثبيت",
-        "حذف",
-    ]
 
-    if text not in commands:
+# =========================================================
+# حظر
+# =========================================================
+
+async def ban_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
         return
 
-    if update.effective_chat.type not in (
-        "group",
-        "supergroup"
-    ):
-        return
+    target = await get_target(update)
 
-    if not await can_manage(
-        update,
-        context
-    ):
-
+    if not target:
         await update.message.reply_text(
-            "❌ ليس لديك صلاحية لاستخدام أوامر الإدارة."
+            "⚠️ استخدم الأمر بالرد على رسالة العضو."
+        )
+        return
+
+    if rank_level(get_user_rank(chat.id, target.id)) >= rank_level(
+        get_user_rank(chat.id, user.id)
+    ):
+        await update.message.reply_text(
+            "❌ لا يمكنك تنفيذ الأمر على شخص رتبته مساوية أو أعلى."
+        )
+        return
+
+    if not await bot_is_admin(update, context):
+        await update.message.reply_text(
+            "❌ يجب أن يكون البوت مشرفًا."
+        )
+        return
+
+    try:
+        await context.bot.ban_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
         )
 
+        await update.message.reply_text(
+            f"🚫 تم حظر {target.first_name}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ لم أستطع حظر العضو.\n{e}"
+        )
+
+
+# =========================================================
+# فك الحظر
+# =========================================================
+
+async def unban_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
         return
 
-    target = await target_from_reply(update)
+    target = await get_target(update)
 
-    # =====================================================
-    # الحذف
-    # =====================================================
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد على رسالة العضو."
+        )
+        return
 
-    if text == "حذف":
+    try:
+        await context.bot.unban_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            only_if_banned=True,
+        )
 
-        if not update.message.reply_to_message:
+        await update.message.reply_text(
+            f"✅ تم فك حظر {target.first_name}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر فك الحظر.\n{e}"
+        )
 
-            await update.message.reply_text(
-                "❌ رد على الرسالة التي تريد حذفها."
+
+# =========================================================
+# طرد
+# =========================================================
+
+async def kick_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد."
+        )
+        return
+
+    try:
+        await context.bot.ban_chat_member(
+            chat.id,
+            target.id,
+        )
+
+        await context.bot.unban_chat_member(
+            chat.id,
+            target.id,
+        )
+
+        await update.message.reply_text(
+            f"👢 تم طرد {target.first_name}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر طرد العضو.\n{e}"
+        )
+
+
+# =========================================================
+# كتم
+# =========================================================
+
+async def mute_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد."
+        )
+        return
+
+    try:
+        from telegram import ChatPermissions
+
+        await context.bot.restrict_chat_member(
+            chat_id=chat.id,
+            user_id=target.id,
+            permissions=ChatPermissions(
+                can_send_messages=False,
+            ),
+        )
+
+        await update.message.reply_text(
+            f"🔇 تم كتم {target.first_name}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر كتم العضو.\n{e}"
+        )
+
+
+# =========================================================
+# فك الكتم
+# =========================================================
+
+async def unmute_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد."
+        )
+        return
+
+    try:
+        from telegram import ChatPermissions
+
+        await context.bot.restrict_chat_member(
+            chat.id,
+            target.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            ),
+        )
+
+        await update.message.reply_text(
+            f"🔊 تم فك كتم {target.first_name}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر فك الكتم.\n{e}"
+        )
+
+
+# =========================================================
+# تحذير
+# =========================================================
+
+async def warn_user(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update)
+
+    if not target:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد."
+        )
+        return
+
+    key = f"{chat.id}:{target.id}"
+
+    warnings[key] = warnings.get(key, 0) + 1
+    save_json("warnings.json", warnings)
+
+    count = warnings[key]
+
+    if count >= 3:
+        try:
+            await context.bot.ban_chat_member(
+                chat.id,
+                target.id,
             )
 
+            warnings[key] = 0
+            save_json("warnings.json", warnings)
+
+            await update.message.reply_text(
+                f"🚫 {target.first_name} وصل إلى 3 تحذيرات وتم حظره."
+            )
             return
-
-        try:
-
-            await update.message.reply_to_message.delete()
-
-            await update.message.delete()
-
         except Exception:
             pass
 
+    await update.message.reply_text(
+        f"⚠️ تم تحذير {target.first_name}\n"
+        f"عدد التحذيرات: {count}/3"
+    )
+
+
+# =========================================================
+# مسح التحذيرات
+# =========================================================
+
+async def clear_warn(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
         return
 
-    # =====================================================
-    # باقي الأوامر تحتاج رد
-    # =====================================================
+    target = await get_target(update)
 
     if not target:
-
         await update.message.reply_text(
-            "❌ يجب أن ترد على رسالة العضو."
+            "⚠️ استخدم الأمر بالرد."
+        )
+        return
+
+    key = f"{chat.id}:{target.id}"
+
+    warnings[key] = 0
+    save_json("warnings.json", warnings)
+
+    await update.message.reply_text(
+        f"✅ تم مسح تحذيرات {target.first_name}"
+    )
+
+
+# =========================================================
+# حذف رسالة بالرد
+# =========================================================
+
+async def delete_reply(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text("❌ ليس لديك صلاحية.")
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد على الرسالة."
+        )
+        return
+
+    try:
+        await update.message.reply_to_message.delete()
+        await update.message.delete()
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر حذف الرسالة.\n{e}"
         )
 
+
+# =========================================================
+# تثبيت
+# =========================================================
+
+async def pin_message(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "مدير"):
+        await update.message.reply_text(
+            "❌ تحتاج رتبة مدير أو أعلى."
+        )
         return
 
-    # =====================================================
-    # حماية المالك
-    # =====================================================
-
-    if target.id == OWNER_ID:
-
-        if text in (
-            "حظر",
-            "طرد",
-            "كتم",
-            "تنزيل"
-        ):
-
-            await update.message.reply_text(
-                "❌ لا يمكن تنفيذ هذا الأمر على مالك البوت."
-            )
-
-            return
-
-    # =====================================================
-    # حظر
-    # =====================================================
-
-    if text == "حظر":
-
-        try:
-
-            await context.bot.ban_chat_member(
-                update.effective_chat.id,
-                target.id
-            )
-
-            await update.message.reply_text(
-                f"🚫 تم حظر {target.first_name}."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع حظر العضو.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # فك الحظر
-    # =====================================================
-
-    elif text == "فك حظر":
-
-        try:
-
-            await context.bot.unban_chat_member(
-                update.effective_chat.id,
-                target.id,
-                only_if_banned=True
-            )
-
-            await update.message.reply_text(
-                f"✅ تم فك حظر {target.first_name}."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع فك الحظر.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # طرد
-    # =====================================================
-
-    elif text == "طرد":
-
-        try:
-
-            await context.bot.ban_chat_member(
-                update.effective_chat.id,
-                target.id
-            )
-
-            await context.bot.unban_chat_member(
-                update.effective_chat.id,
-                target.id
-            )
-
-            await update.message.reply_text(
-                f"👢 تم طرد {target.first_name}."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع طرد العضو.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # كتم
-    # =====================================================
-
-    elif text == "كتم":
-
-        try:
-
-            permissions = ChatPermissions(
-                can_send_messages=False
-            )
-
-            await context.bot.restrict_chat_member(
-                update.effective_chat.id,
-                target.id,
-                permissions=permissions
-            )
-
-            await update.message.reply_text(
-                f"🔇 تم كتم {target.first_name}."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع كتم العضو.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # فك الكتم
-    # =====================================================
-
-    elif text == "فك كتم":
-
-        try:
-
-            permissions = ChatPermissions(
-                can_send_messages=True,
-                can_send_audios=True,
-                can_send_documents=True,
-                can_send_photos=True,
-                can_send_videos=True,
-                can_send_video_notes=True,
-                can_send_voice_notes=True,
-                can_send_polls=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True
-            )
-
-            await context.bot.restrict_chat_member(
-                update.effective_chat.id,
-                target.id,
-                permissions=permissions
-            )
-
-            await update.message.reply_text(
-                f"🔊 تم فك كتم {target.first_name}."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع فك الكتم.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # ترقية
-    # =====================================================
-
-    elif text == "ترقية":
-
-        try:
-
-            await context.bot.promote_chat_member(
-                update.effective_chat.id,
-                target.id,
-
-                can_manage_chat=True,
-                can_delete_messages=True,
-                can_manage_video_chats=True,
-                can_restrict_members=True,
-                can_promote_members=False,
-                can_change_info=True,
-                can_invite_users=True,
-                can_pin_messages=True
-            )
-
-            await update.message.reply_text(
-                f"⬆️ تم ترقية {target.first_name} إلى مشرف."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع ترقية العضو.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # تنزيل
-    # =====================================================
-
-    elif text == "تنزيل":
-
-        try:
-
-            await context.bot.promote_chat_member(
-                update.effective_chat.id,
-                target.id,
-
-                can_manage_chat=False,
-                can_delete_messages=False,
-                can_manage_video_chats=False,
-                can_restrict_members=False,
-                can_promote_members=False,
-                can_change_info=False,
-                can_invite_users=False,
-                can_pin_messages=False
-            )
-
-            await update.message.reply_text(
-                f"⬇️ تم تنزيل {target.first_name} من الإشراف."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع تنزيل المشرف.\n"
-                f"{e}"
-            )
-
-    # =====================================================
-    # تثبيت
-    # =====================================================
-
-    elif text == "تثبيت":
-
-        try:
-
-            await update.message.reply_to_message.pin(
-                disable_notification=False
-            )
-
-            await update.message.reply_text(
-                "📌 تم تثبيت الرسالة."
-            )
-
-        except Exception as e:
-
-            await update.message.reply_text(
-                "❌ لم أستطع تثبيت الرسالة.\n"
-                f"{e}"
-            )
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "⚠️ استخدم الأمر بالرد على الرسالة."
+        )
+        return
+
+    try:
+        await update.message.reply_to_message.pin(
+            disable_notification=False
+        )
+
+        await update.message.reply_text("📌 تم تثبيت الرسالة.")
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ تعذر التثبيت.\n{e}"
+        )
 
 
 # =========================================================
-# إضافة الردود
+# تنزيل الكل
 # =========================================================
 
-async def addreply(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def demote_all(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
 
-    if not is_owner(
-        update.effective_user.id
-    ):
+    if not can_manage(chat.id, user.id, "مالك"):
+        await update.message.reply_text(
+            "❌ تحتاج رتبة مالك."
+        )
         return
 
-    reply_state[
-        update.effective_user.id
-    ] = {
+    data = get_group_ranks(chat.id)
+
+    for rank in RANKS:
+        if rank != "مالك اساسي":
+            data[rank] = []
+
+    save_ranks()
+
+    await update.message.reply_text(
+        "✅ تم تنزيل جميع الرتب التي يسمح لك بتنزيلها."
+    )
+
+
+# =========================================================
+# عرض الرتب
+# =========================================================
+
+async def show_ranks(update, context):
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not can_manage(chat.id, user.id, "ادمن"):
+        await update.message.reply_text(
+            "❌ هذا الأمر للأدمنية فقط."
+        )
+        return
+
+    data = get_group_ranks(chat.id)
+
+    text = "👑 رتب المجموعة\n━━━━━━━━━━━━\n"
+
+    for rank in RANKS:
+        ids = data.get(rank, [])
+
+        text += f"\n{rank}: {len(ids)}"
+
+        for uid in ids[:20]:
+            try:
+                member = await context.bot.get_chat_member(
+                    chat.id,
+                    uid,
+                )
+                name = member.user.first_name
+                text += f"\n  • {name}"
+            except Exception:
+                text += f"\n  • {uid}"
+
+    await update.message.reply_text(text)
+
+
+# =========================================================
+# م4
+# =========================================================
+
+async def m4(update, context):
+    await update.message.reply_text(
+        """
+🎮 اوامر التسليه
+━━━━━━━━━━━━
+
+• رفع هطف
+• تنزيل هطف
+• رفع بثر
+• تنزيل بثر
+• رفع حمار
+• تنزيل حمار
+• رفع كلب
+• تنزيل كلب
+• رفع كلبه
+• تنزيل كلبه
+• رفع عتوي
+• تنزيل عتوي
+• رفع لحجي
+• تنزيل لحجي
+• رفع خروف
+• تنزيل خروف
+
+• طلاق
+• زواج
+• زوجي
+• زوجتي
+• تتزوجني
+
+• اكتموه
+━━━━━━━━━━━━
+"""
+    )
+
+
+# =========================================================
+# م6
+# =========================================================
+
+async def m6(update, context):
+    await update.message.reply_text(
+        """
+🧰 الاوامر الخدميه
+━━━━━━━━━━━━
+
+• نسبة الحب
+• تحبه
+• شبيهي
+• شبيهتي
+• شرايك في افتاري
+• افتاره
+• البايو
+• قوقل + البحث
+• تطبيق + اسم التطبيق
+• تحميل لعبة + اسم اللعبة
+• قران
+• اذكار
+• شعر
+• قصائد
+• اقتباسات
+• ثريد
+• قصص
+• كتب
+• من ضافني
+• اضف رد انلاين
+• اضف رد متعدد
+━━━━━━━━━━━━
+"""
+    )
+
+
+# =========================================================
+# الردود
+# =========================================================
+
+async def addreply(update, context):
+    if update.effective_user.id != OWNER_ID:
+        return
+
+    reply_state[update.effective_user.id] = {
         "step": "question"
     }
 
     await update.message.reply_text(
-        "✏️ أرسل الكلمة أو السؤال الذي تريد إضافة رد له."
+        "✏️ أرسل الكلمة أو السؤال."
     )
 
 
-async def delreply(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
+async def delreply(update, context):
+    if update.effective_user.id != OWNER_ID:
         return
 
-    key = " ".join(
-        context.args
-    ).lower()
+    key = " ".join(context.args).lower()
 
     if key in replies:
-
         del replies[key]
-
-        save_json(
-            "replies.json",
-            replies
-        )
+        save_json("replies.json", replies)
 
         await update.message.reply_text(
             "🗑 تم حذف الرد."
         )
-
     else:
-
         await update.message.reply_text(
             "❌ الرد غير موجود."
         )
 
 
-async def listreply(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
+async def listreply(update, context):
+    if update.effective_user.id != OWNER_ID:
         return
 
     if not replies:
-
         await update.message.reply_text(
             "لا توجد ردود."
         )
-
         return
 
-    text = "\n".join(
-        replies.keys()
-    )
+    text = "\n".join(replies.keys())
 
     await update.message.reply_text(
-        "📝 الردود:\n\n"
-        + text
+        "📋 الردود:\n\n" + text
     )
 
 
 # =========================================================
-# الردود التلقائية والنكت
+# الردود التلقائية
 # =========================================================
 
-async def reply(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not update.message:
-        return
-
-    if not update.message.text:
+async def reply_handler(update, context):
+    if not update.message or not update.message.text:
         return
 
     user_id = update.effective_user.id
+    text = update.message.text.strip().lower()
 
-    text = (
-        update.message.text
-        .strip()
-        .lower()
-    )
-
-    # إضافة رد جديد
     if user_id in reply_state:
 
         state = reply_state[user_id]
 
         if state["step"] == "question":
-
             state["question"] = text
             state["step"] = "answer"
 
             await update.message.reply_text(
                 "💬 الآن أرسل الرد."
             )
-
             return
 
-        elif state["step"] == "answer":
-
+        if state["step"] == "answer":
             question = state["question"]
 
             if question not in replies:
@@ -840,68 +1004,38 @@ async def reply(
 
             replies[question].append(text)
 
-            save_json(
-                "replies.json",
-                replies
-            )
+            save_json("replies.json", replies)
 
             del reply_state[user_id]
 
             await update.message.reply_text(
                 "✅ تم حفظ الرد."
             )
-
             return
 
-    # النكت
-    if text in (
-        "نكته",
-        "نكتة",
-        "ضحكني"
-    ):
-
+    if text in ("نكته", "نكتة", "ضحكني"):
         await update.message.reply_text(
             random.choice(jokes)
         )
-
         return
 
-    # الردود
     if text in replies:
-
-        answer = replies[text]
-
-        if isinstance(answer, list):
-
-            await update.message.reply_text(
-                random.choice(answer)
-            )
-
-        else:
-
-            await update.message.reply_text(
-                str(answer)
-            )
+        await update.message.reply_text(
+            random.choice(replies[text])
+        )
 
 
 # =========================================================
-# الإحصائيات
+# إحصائيات
 # =========================================================
 
-async def stats(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
+async def stats(update, context):
+    if update.effective_user.id != OWNER_ID:
         return
 
     await update.message.reply_text(
-        f"👥 عدد المستخدمين: {len(users)}\n"
-        f"👨‍👩‍👧‍👦 عدد المجموعات: {len(groups)}\n"
-        f"👑 عدد المالكين المساعدين: {len(sudo_users)}"
+        f"📊 عدد المستخدمين: {len(users)}\n"
+        f"📊 عدد المجموعات: {len(groups)}"
     )
 
 
@@ -909,32 +1043,20 @@ async def stats(
 # المستخدمون
 # =========================================================
 
-async def userscmd(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
+async def userscmd(update, context):
+    if update.effective_user.id != OWNER_ID:
         return
 
     if not users:
-
         await update.message.reply_text(
             "لا يوجد مستخدمون."
         )
-
         return
 
-    text = "\n".join(
-        str(user)
-        for user in users
-    )
+    text = "\n".join(str(user) for user in users)
 
     await update.message.reply_text(
-        "👥 المستخدمون:\n\n"
-        + text
+        f"👥 المستخدمون:\n\n{text}"
     )
 
 
@@ -942,42 +1064,27 @@ async def userscmd(
 # البث
 # =========================================================
 
-async def broadcast(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
+async def broadcast(update, context):
+    if update.effective_user.id != OWNER_ID:
         return
 
     if not context.args:
-
         await update.message.reply_text(
-            "الاستخدام:\n"
-            "/broadcast الرسالة"
+            "الاستخدام:\n/broadcast الرسالة"
         )
-
         return
 
-    message = " ".join(
-        context.args
-    )
+    message = " ".join(context.args)
 
     sent = 0
 
-    for user in users:
-
+    for user in list(users):
         try:
-
             await context.bot.send_message(
                 chat_id=user,
-                text=message
+                text=message,
             )
-
             sent += 1
-
         except Exception:
             pass
 
@@ -987,221 +1094,203 @@ async def broadcast(
 
 
 # =========================================================
-# إضافة نكتة
-# =========================================================
-
-async def addjoke(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not is_owner(
-        update.effective_user.id
-    ):
-        return
-
-    if not context.args:
-
-        await update.message.reply_text(
-            "الاستخدام:\n"
-            "/addjoke النكتة"
-        )
-
-        return
-
-    joke = " ".join(
-        context.args
-    )
-
-    jokes.append(joke)
-
-    await update.message.reply_text(
-        "✅ تم إضافة النكتة."
-    )
-
-
-# =========================================================
 # المساعدة
 # =========================================================
 
-async def helpcmd(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def helpcmd(update, context):
+    if update.effective_user.id != OWNER_ID:
+        return
 
     await update.message.reply_text(
         """
-🤖 أوامر البوت
-
 👑 أوامر المالك:
 
-/addsudo
-/delsudo
-/listsudo
-
-/stats
-/users
-/broadcast
 /addreply
 /delreply
 /listreply
-/addjoke
+/stats
+/users
+/broadcast
 
-🛡️ أوامر الإدارة بالعربي:
+وفي المجموعات:
 
-🚫 حظر
-✅ فك حظر
-👢 طرد
-🔇 كتم
-🔊 فك كتم
-⬆️ ترقية
-⬇️ تنزيل
-📌 تثبيت
-🗑 حذف
-
-📌 طريقة الاستخدام:
-
-رد على رسالة العضو ثم اكتب الأمر.
-
-مثال:
-
-حظر
-
-أو:
-
-كتم
-
-أو:
-
-ترقية
-
-⚠️ يجب أن يكون البوت مشرفًا في المجموعة
-ولديه الصلاحيات المطلوبة.
+الاوامر
+م1
+م4
+م6
 """
     )
+
+
+# =========================================================
+# معالجة الأوامر العربية
+# =========================================================
+
+async def text_commands(update, context):
+
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text.strip().lower()
+
+    # القائمة
+    if text in ("الاوامر", "الـاوامر"):
+        await commands_menu(update, context)
+        return
+
+    if text in ("م1", "م 1"):
+        await m1(update, context)
+        return
+
+    if text in ("م4", "م 4"):
+        await m4(update, context)
+        return
+
+    if text in ("م6", "م 6"):
+        await m6(update, context)
+        return
+
+    # عرض الرتب
+    if text in ("الرتب", "المشرفين"):
+        await show_ranks(update, context)
+        return
+
+    # -----------------------------------------------------
+    # رفع الرتب
+    # -----------------------------------------------------
+
+    for rank in RANKS:
+
+        if text == f"رفع {rank}":
+            await promote_rank(
+                update,
+                context,
+                rank,
+            )
+            return
+
+        if text == f"تنزيل {rank}":
+            await demote_rank(
+                update,
+                context,
+                rank,
+            )
+            return
+
+    if text == "تنزيل الكل":
+        await demote_all(update, context)
+        return
+
+    # -----------------------------------------------------
+    # الإدارة
+    # -----------------------------------------------------
+
+    if text == "حظر":
+        await ban_user(update, context)
+        return
+
+    if text in ("الغاء الحظر", "فك الحظر"):
+        await unban_user(update, context)
+        return
+
+    if text == "طرد":
+        await kick_user(update, context)
+        return
+
+    if text == "كتم":
+        await mute_user(update, context)
+        return
+
+    if text in ("الغاء الكتم", "فك الكتم"):
+        await unmute_user(update, context)
+        return
+
+    if text in ("تحذير", "انذار"):
+        await warn_user(update, context)
+        return
+
+    if text in ("مسح التحذيرات", "مسح التحذير"):
+        await clear_warn(update, context)
+        return
+
+    if text in ("حذف", "مسح بالرد"):
+        await delete_reply(update, context)
+        return
+
+    if text in ("تثبيت", "ثبت"):
+        await pin_message(update, context)
+        return
 
 
 # =========================================================
 # تشغيل البوت
 # =========================================================
 
-app = Application.builder().token(TOKEN).build()
+def main():
 
-
-# البداية
-app.add_handler(
-    CommandHandler(
-        "start",
-        start
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
     )
-)
 
-
-# SUDO
-app.add_handler(
-    CommandHandler(
-        "addsudo",
-        addsudo
+    # أوامر Telegram
+    app.add_handler(
+        CommandHandler("start", start)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "delsudo",
-        delsudo
+    app.add_handler(
+        CommandHandler("addreply", addreply)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "listsudo",
-        listsudo
+    app.add_handler(
+        CommandHandler("delreply", delreply)
     )
-)
 
-
-# الردود
-app.add_handler(
-    CommandHandler(
-        "addreply",
-        addreply
+    app.add_handler(
+        CommandHandler("listreply", listreply)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "delreply",
-        delreply
+    app.add_handler(
+        CommandHandler("stats", stats)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "listreply",
-        listreply
+    app.add_handler(
+        CommandHandler("users", userscmd)
     )
-)
 
-
-# الإحصائيات والبث
-app.add_handler(
-    CommandHandler(
-        "stats",
-        stats
+    app.add_handler(
+        CommandHandler("broadcast", broadcast)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "users",
-        userscmd
+    app.add_handler(
+        CommandHandler("help", helpcmd)
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "broadcast",
-        broadcast
+    # الأوامر العربية
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_commands,
+        ),
+        group=0,
     )
-)
 
-app.add_handler(
-    CommandHandler(
-        "addjoke",
-        addjoke
+    # الردود التلقائية
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            reply_handler,
+        ),
+        group=1,
     )
-)
 
+    print("Bot is running...")
 
-# المساعدة
-app.add_handler(
-    CommandHandler(
-        "help",
-        helpcmd
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES
     )
-)
 
 
-# =========================================================
-# مهم:
-# أوامر الإدارة العربية قبل الردود العادية
-# =========================================================
-
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        arabic_admin
-    )
-)
-
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        reply
-    )
-)
-
-
-print("🤖 البوت يعمل الآن...")
-
-app.run_polling()
+if __name__ == "__main__":
+    main()
