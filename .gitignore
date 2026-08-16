@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+bot.sqlite3
+.env
