@@ -172,17 +172,35 @@ def rank(chat_id, user_id):
           (chat_id,user_id), True, True)
     return r["rank"] if r else "عضو"
 
+async def sync_rank(chat_id, user_id, bot):
+    if is_dev(user_id):
+        return "مطور"
+    r = q("SELECT rank FROM ranks WHERE chat_id=? AND user_id=?",
+          (chat_id,user_id), True, True)
+    if r:
+        return r["rank"]
+    try:
+        m = await bot.get_chat_member(chat_id, user_id)
+        if m.status == ChatMemberStatus.OWNER:
+            return "مالك اساسي"
+        if m.status == ChatMemberStatus.ADMINISTRATOR:
+            return "ادمن"
+    except Exception:
+        pass
+    return "عضو"
+
+async def rank_level(chat_id, user_id, bot):
+    return RANKS.get(await sync_rank(chat_id, user_id, bot), 0)
+
 def level(chat_id, user_id):
     return RANKS.get(rank(chat_id,user_id), 0)
-
-def can(chat_id, user_id, needed):
-    return level(chat_id,user_id) >= RANKS[needed]
 
 async def admin_required(update, needed="ادمن"):
     if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await reply(update, "❌ هذا الأمر للمجموعات فقط.")
         return False
-    if not can(update.effective_chat.id, update.effective_user.id, needed):
+    lv = await rank_level(update.effective_chat.id, update.effective_user.id, update.get_bot())
+    if lv < RANKS[needed]:
         await reply(update, f"❌ هذا الأمر يحتاج رتبة {needed} أو أعلى.")
         return False
     return True
@@ -241,36 +259,40 @@ async def delete_message(message):
 
 BASE_MENU = """🤖 بوت لينا
 
-الأوامر المتاحة حسب رتبتك:
-• رتبتي
-• معلوماتي
-• القوانين
-• الرابط
-• اهمس
-• نسبة الحب / تحبه
-• هطف / بثر / حمار / زواج / طلاق
+❌ لا توجد لديك رتبة إدارية.
+اكتب «رتبتي» لمعرفة رتبتك.
 """
 
-ADMIN_MENU = BASE_MENU + """
-🛡️ الإدارة:
+ADMIN_MENU = """👑 أوامر بوت لينا — للمدير فأعلى
+
+🎖️ الرتب:
 • رفع مميز / تنزيل مميز
 • رفع ادمن / تنزيل ادمن
 • رفع مدير / تنزيل مدير
 • رفع منشئ / تنزيل منشئ
 • رفع مالك / تنزيل مالك
+• رفع المالك / رفع الملك
+• رفع مالك اساسي / تنزيل مالك اساسي
+• رتبتي / الرتب
+
+🛡️ الإدارة:
 • حظر / فك حظر / طرد
 • كتم / فك كتم
 • مسح
+• معلوماتي / معلومات المجموعة
+• القوانين / الرابط
 
-💬 الردود:
+💬 الردود والأوامر:
 • اضف رد الكلمة الرد
 • اضف رد عام الكلمة الرد
 • اضف رد مميز الكلمة الرد
 • اضف رد متعدد الكلمة الرد
 • حذف رد الكلمة
 • الردود
+• اضف امر الاسم الرد
+• حذف امر الاسم
 
-🔒 الحماية:
+🔒 القفل والفتح:
 • قفل الروابط / فتح الروابط
 • قفل الصور / فتح الصور
 • قفل الفيديو / فتح الفيديو
@@ -278,50 +300,73 @@ ADMIN_MENU = BASE_MENU + """
 • قفل الملصقات / فتح الملصقات
 • قفل المتحركة / فتح المتحركة
 • قفل المنشن / فتح المنشن
+• قفل التاغات / فتح التاغات
 • قفل التوجيه / فتح التوجيه
 • قفل البوتات / فتح البوتات
 • قفل التعديل / فتح التعديل
 • قفل الكتابة / فتح الكتابة
+• قفل الجهات / فتح الجهات
+• قفل الملفات / فتح الملفات
+• قفل التكرار / فتح التكرار
+• قفل الكلام المسيء / فتح الكلام المسيء
+• قفل المكالمات / فتح المكالمات
+• قفل الدخول / فتح الدخول
 • قفل الكل / فتح الكل
+
+🎮 الترفيه:
+• نسبة الحب / تحبه
+• هطف / بثر / حمار / مزعج / كيوت
+• زواج / طلاق / نرد
+• اهمس
 """
 
 OWNER_MENU = ADMIN_MENU + """
-⚙️ الإعدادات:
+
+⚙️ إعدادات المجموعة:
+• الاعدادات
 • ضع قوانين النص
 • ضع ترحيب النص
 • تفعيل الترحيب / تعطيل الترحيب
 • ضع رابط الرابط
 • حذف الرابط
 • ايدي المجموعة
-• معلومات المجموعة
-• الحماية / تعطيل الحماية
-• الاعدادات
 • اضف قناة @channel
 • حذف قناة @channel
+• الحماية / تعطيل الحماية
+• تفعيل الردود / تعطيل الردود
+• مسح الردود
+• مسح الاوامر
+• مسح الرتب
+• مسح المحظورين
+• مسح المكتومين
 """
 
 DEV_MENU = OWNER_MENU + """
+
 👨‍💻 المطور:
 • لوحة المطور
 • احصائيات
+• رفع مطور / تنزيل مطور
+• مسح المطورين
 • حظر عام / فك حظر عام
 • كتم عام / فك كتم عام
-• حظر مطور
-• مسح المطورين
-• تفعيل الردود / تعطيل الردود
+• قائمة المحظورين العام
 • تفعيل الاحصائيات / تعطيل الاحصائيات
 • تفعيل الحماية / تعطيل الحماية
+• تفعيل الردود / تعطيل الردود
+• اسم البوت
+• حالة البوت
 """
 
-def menu_for(chat_id, user_id):
-    l = level(chat_id,user_id)
+async def menu_for(chat_id, user_id, bot):
+    l = await rank_level(chat_id, user_id, bot)
+    if l < RANKS["مدير"]:
+        return "❌ قائمة الأوامر الإدارية تظهر فقط لمن لديه رتبة مدير أو أعلى.\nاكتب «رتبتي» لمعرفة رتبتك."
     if l >= RANKS["مطور"]:
         return DEV_MENU
     if l >= RANKS["مالك"]:
         return OWNER_MENU
-    if l >= RANKS["ادمن"]:
-        return ADMIN_MENU
-    return BASE_MENU
+    return ADMIN_MENU
 
 # ---------------- Start / commands ----------------
 
@@ -349,17 +394,18 @@ async def commands(update, context):
     if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await reply(update, "اكتب «اوامر» داخل المجموعة.")
         return
-    await reply(update, menu_for(update.effective_chat.id, update.effective_user.id))
+    await reply(update, await menu_for(update.effective_chat.id, update.effective_user.id, update.get_bot()))
 
 async def my_rank(update, context):
     if update.effective_chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         await reply(update, "❌ للمجموعات.")
         return
-    await reply(update, f"🎖️ رتبتك: {rank(update.effective_chat.id, update.effective_user.id)}")
+    r = await sync_rank(update.effective_chat.id, update.effective_user.id, update.get_bot())
+    await reply(update, f"🎖️ رتبتك: {r}")
 
 async def my_info(update, context):
     u = update.effective_user
-    r = rank(update.effective_chat.id,u.id) if update.effective_chat.type in (ChatType.GROUP,ChatType.SUPERGROUP) else "عضو"
+    r = await sync_rank(update.effective_chat.id,u.id,update.get_bot()) if update.effective_chat.type in (ChatType.GROUP,ChatType.SUPERGROUP) else "عضو"
     await reply(update, f"👤 الاسم: {u.full_name}\n🆔 الآيدي: {u.id}\n🔹 اليوزر: @{u.username or 'لا يوجد'}\n🎖️ الرتبة: {r}")
 
 async def group_info(update, context):
@@ -380,7 +426,7 @@ async def rank_cmd(update, context, wanted, promote):
     if not t:
         await reply(update, "❌ قم بالرد على العضو.")
         return
-    actor_level = level(update.effective_chat.id, update.effective_user.id)
+    actor_level = await rank_level(update.effective_chat.id, update.effective_user.id, update.get_bot())
     if actor_level <= RANKS[wanted]:
         await reply(update, "❌ لا يمكنك إعطاء رتبة أعلى من رتبتك أو مساوية لها.")
         return
@@ -401,7 +447,8 @@ async def ban(update, context):
     if not await admin_required(update,"ادمن"): return
     t = await get_target(update,context)
     if not t: await reply(update,"❌ قم بالرد على العضو."); return
-    if level(update.effective_chat.id,update.effective_user.id) <= level(update.effective_chat.id,t.id):
+    if (await rank_level(update.effective_chat.id,update.effective_user.id,update.get_bot())
+            <= await rank_level(update.effective_chat.id,t.id,update.get_bot())):
         await reply(update,"❌ لا يمكنك حظر رتبة مساوية أو أعلى."); return
     try:
         await context.bot.ban_chat_member(update.effective_chat.id,t.id)
@@ -493,17 +540,43 @@ async def clear(update, context):
 # ---------------- Replies ----------------
 
 async def add_reply(update, context, kind="normal"):
-    if not await admin_required(update,"ادمن"): return
-    parts = update.message.text.split(maxsplit=3)
-    if len(parts)<4:
-        await reply(update,"❌ الصيغة: اضف رد [الكلمة] [الرد]")
+    if not await admin_required(update, "مدير"):
         return
-    key=clean_key(parts[2]); value=parts[3]
+
+    raw = update.message.text.strip()
+    nraw = norm(raw)
+    prefixes = [
+        ("اضف رد عام", "global"),
+        ("اضف رد مميز", "special"),
+        ("اضف رد متعدد", "multi"),
+        ("اضف رد", "normal"),
+    ]
+    chosen = None
+    for prefix, k in prefixes:
+        if nraw.lower().startswith(prefix):
+            chosen = (prefix, k)
+            break
+
+    if not chosen:
+        await reply(update, "❌ الصيغة: اضف رد الكلمة الرد")
+        return
+
+    rest = raw[len(chosen[0]):].strip()
+    parts = rest.split(maxsplit=1)
+    if len(parts) < 2:
+        await reply(update, "❌ اكتب الكلمة ثم الرد.")
+        return
+
+    key = clean_key(parts[0])
+    value = parts[1].strip()
+    save_chat = 0 if chosen[1] == "global" else update.effective_chat.id
+
     q("DELETE FROM replies WHERE chat_id=? AND key=? AND kind=?",
-      (update.effective_chat.id,key,kind))
+      (save_chat, key, chosen[1]))
     q("INSERT INTO replies(chat_id,key,value,kind) VALUES(?,?,?,?)",
-      (update.effective_chat.id,key,value,kind))
-    await reply(update,f"✅ تم حفظ الرد «{parts[2]}».")
+      (save_chat, key, value, chosen[1]))
+
+    await reply(update, f"✅ تم حفظ الرد «{parts[0]}» بنجاح.")
 
 async def delete_reply(update, context):
     if not await admin_required(update,"ادمن"): return
@@ -516,7 +589,7 @@ async def delete_reply(update, context):
 
 async def list_replies(update, context):
     if not await admin_required(update,"ادمن"): return
-    rows=q("SELECT key,kind FROM replies WHERE chat_id=? ORDER BY key",
+    rows=q("SELECT key,kind FROM replies WHERE chat_id IN (?,0) ORDER BY key",
            (update.effective_chat.id,),True)
     if not rows:
         await reply(update,"💬 لا توجد ردود.")
@@ -525,6 +598,20 @@ async def list_replies(update, context):
     await reply(update,"💬 الردود:\n"+"\n".join(
         f"• {r['key']} — {names.get(r['kind'],r['kind'])}" for r in rows
     ))
+
+async def ranks_list(update, context):
+    if not await admin_required(update, "مدير"):
+        return
+    rows=q("SELECT user_id,rank FROM ranks WHERE chat_id=? ORDER BY rank",
+           (update.effective_chat.id,),True)
+    if not rows:
+        await reply(update, "📋 لا توجد رتب مضافة يدويًا. رتب مشرفي Telegram تظهر في «رتبتي».")
+        return
+    lines=["📋 رتب المجموعة:"]
+    for row in rows:
+        lines.append(f"• <a href='tg://user?id={row['user_id']}'>عضو</a> — {row['rank']}")
+    await reply(update, "\n".join(lines), parse_mode="HTML")
+
 
 # ---------------- Settings ----------------
 
@@ -613,6 +700,14 @@ async def set_lock(update, context, enabled):
     if len(parts)<2:
         await reply(update,"❌ مثال: قفل الروابط"); return
     item=parts[1]
+    aliases={
+        "التاغ":"المنشن","التاج":"المنشن","الفيديوهات":"الفيديو",
+        "الصور":"الصور","الصور والفيديو":"الوسائط",
+        "الكلام البذيء":"الكلام المسيء","السب":"الكلام المسيء",
+        "التحويل":"التوجيه","الفورورد":"التوجيه","الانلاين":"الانلاين",
+        "المكالمات":"المكالمات","الجهات":"الجهات","الملفات":"الملفات",
+    }
+    item=aliases.get(item,item)
     if item=="الكل":
         for k in LOCK_LABELS:
             q("INSERT OR REPLACE INTO locks VALUES(?,?,?)",(update.effective_chat.id,k,1 if enabled else 0))
@@ -831,6 +926,81 @@ async def enforce(update, context):
     if bad:
         await delete_message(m)
 
+async def promote_dev(update, context, promote=True):
+    if not is_dev(update.effective_user.id):
+        await reply(update, "❌ للمطور الأساسي فقط.")
+        return
+    t=await get_target(update, context)
+    if not t:
+        await reply(update, "❌ قم بالرد على العضو.")
+        return
+    if promote:
+        set_rank(update.effective_chat.id, t.id, "مطور")
+        await reply(update, "👨‍💻 تم تعيين مطور ثانوي.")
+    else:
+        if not is_dev(t.id):
+            remove_rank(update.effective_chat.id, t.id)
+        await reply(update, "✅ تم تنزيل المطور الثانوي.")
+
+
+async def clear_ranks_cmd(update, context):
+    if not await admin_required(update, "مالك"): return
+    q("DELETE FROM ranks WHERE chat_id=?", (update.effective_chat.id,))
+    await reply(update, "🧹 تم مسح الرتب المضافة في هذه المجموعة.")
+
+async def clear_replies_cmd(update, context):
+    if not await admin_required(update, "مالك"): return
+    q("DELETE FROM replies WHERE chat_id=?", (update.effective_chat.id,))
+    await reply(update, "🧹 تم مسح ردود المجموعة.")
+
+async def clear_commands_cmd(update, context):
+    if not await admin_required(update, "مالك"): return
+    q("DELETE FROM custom_commands WHERE chat_id=?", (update.effective_chat.id,))
+    await reply(update, "🧹 تم مسح الأوامر المضافة.")
+
+async def clear_bans_cmd(update, context):
+    if not await admin_required(update, "مدير"): return
+    q("DELETE FROM bans WHERE chat_id=?", (update.effective_chat.id,))
+    await reply(update, "🧹 تم مسح قائمة الحظر المسجلة.")
+
+async def clear_mutes_cmd(update, context):
+    if not await admin_required(update, "مدير"): return
+    q("DELETE FROM mutes WHERE chat_id=?", (update.effective_chat.id,))
+    await reply(update, "🧹 تم مسح قائمة الكتم المسجلة.")
+
+async def bot_status(update, context):
+    if not is_dev(update.effective_user.id):
+        await reply(update, "❌ للمطور فقط."); return
+    await reply(update, "🟢 بوت لينا يعمل بشكل طبيعي.")
+
+async def bot_name_cmd(update, context):
+    if not is_dev(update.effective_user.id):
+        await reply(update, "❌ للمطور فقط."); return
+    parts=update.message.text.split(maxsplit=2)
+    if len(parts)<3:
+        await reply(update, "❌ الصيغة: اسم البوت الاسم الجديد"); return
+    # Store globally as a simple setting.
+    q("INSERT OR REPLACE INTO global_settings(key,value) VALUES(?,?)", ("bot_name",parts[2]))
+    await reply(update, f"✅ تم تغيير الاسم الداخلي إلى: {parts[2]}")
+
+async def global_banned_list(update, context):
+    if not is_dev(update.effective_user.id):
+        await reply(update, "❌ للمطور فقط."); return
+    rows=q("SELECT user_id FROM global_bans ORDER BY user_id", fetch=True)
+    if not rows:
+        await reply(update, "📋 لا يوجد حظر عام.")
+        return
+    await reply(update, "🌍 المحظورون عالميًا:\n" + "\n".join("• "+str(r["user_id"]) for r in rows))
+
+
+async def protection_cmd(update, context, enabled=True):
+    if not await admin_required(update, "مالك"):
+        return
+    q("UPDATE groups SET protection=? WHERE chat_id=?",
+      (1 if enabled else 0, update.effective_chat.id))
+    await reply(update, "🛡️ تم تفعيل الحماية." if enabled else "🛡️ تم تعطيل الحماية.")
+
+
 # ---------------- Text router ----------------
 
 async def text_router(update, context):
@@ -874,7 +1044,8 @@ async def text_router(update, context):
         "القوانين":show_rules,"الرابط":show_link,
         "حظر":ban,"فك حظر":unban,"طرد":kick,
         "كتم":mute,"فك كتم":unmute,"مسح":clear,
-        "الردود":list_replies,"اهمس":whisper,
+        "الردود":list_replies,"الرتب":ranks_list,"قائمة الرتب":ranks_list,
+        "اهمس":whisper,
         "نسبة الحب":love,"تحبه":who_loves,
         "هطف":lambda u,c:fun_percent(u,c,"هطف"),
         "بثر":lambda u,c:fun_percent(u,c,"بثر"),
@@ -884,6 +1055,8 @@ async def text_router(update, context):
         "نرد":dice_game,
         "لوحة المطور":dev_panel,"لوحه المطور":dev_panel,
         "احصائيات":stats,
+        "رفع مطور":lambda u,c:promote_dev(u,c,True),
+        "تنزيل مطور":lambda u,c:promote_dev(u,c,False),
         "حظر عام":lambda u,c:global_ban(u,c,True),
         "فك حظر عام":lambda u,c:global_ban(u,c,False),
         "كتم عام":lambda u,c:global_mute(u,c,True),
@@ -893,6 +1066,16 @@ async def text_router(update, context):
         "اضف قناة":add_channel,"حذف قناة":del_channel,
         "قفل":lambda u,c:set_lock(u,c,True),
         "فتح":lambda u,c:set_lock(u,c,False),
+        "مسح الردود":clear_replies_cmd,
+        "مسح الاوامر":clear_commands_cmd,
+        "مسح الرتب":clear_ranks_cmd,
+        "مسح المحظورين":clear_bans_cmd,
+        "مسح المكتومين":clear_mutes_cmd,
+        "قائمة المحظورين العام":global_banned_list,
+        "حالة البوت":bot_status,
+        "اسم البوت":bot_name_cmd,
+        "الملك":my_rank,
+        "المالك":my_rank,
     }
 
     # rank commands
@@ -902,7 +1085,10 @@ async def text_router(update, context):
         "رفع مدير":("مدير",True),"تنزيل مدير":("مدير",False),
         "رفع منشئ":("منشئ",True),"تنزيل منشئ":("منشئ",False),
         "رفع مالك":("مالك",True),"تنزيل مالك":("مالك",False),
+        "رفع المالك":("مالك",True),"تنزيل المالك":("مالك",False),
+        "رفع الملك":("مالك",True),"تنزيل الملك":("مالك",False),
         "رفع مالك اساسي":("مالك اساسي",True),"تنزيل مالك اساسي":("مالك اساسي",False),
+        "رفع المالك الاساسي":("مالك اساسي",True),"تنزيل المالك الاساسي":("مالك اساسي",False),
     }
     if low in rank_map:
         await rank_cmd(update,context,*rank_map[low]); return
@@ -922,11 +1108,18 @@ async def text_router(update, context):
         await set_rules_cmd(update,context); return
     if low.startswith("ضع ترحيب "):
         await set_welcome_cmd(update,context); return
+    if low=="الحماية":
+        await protection_cmd(update, context, True); return
+    if low=="تعطيل الحماية":
+        await protection_cmd(update, context, False); return
+
     if low=="تفعيل الترحيب":
         await welcome_toggle(update,context,True); return
     if low=="تعطيل الترحيب":
         await welcome_toggle(update,context,False); return
     if low.startswith("ضع رابط "):
+        await set_link(update,context); return
+    if low.startswith("تعيين رابط "):
         await set_link(update,context); return
     if low=="حذف الرابط":
         await delete_link(update,context); return
@@ -966,14 +1159,19 @@ async def text_router(update, context):
 
         g=group_row(update.effective_chat.id)
         if g["my_replies"]:
-            rr=q("""SELECT value,kind FROM replies
-                    WHERE chat_id=? AND key=? ORDER BY CASE kind
-                    WHEN 'special' THEN 0 WHEN 'normal' THEN 1 WHEN 'multi' THEN 2 WHEN 'global' THEN 3 END
-                    LIMIT 1""",
-                 (update.effective_chat.id,clean_key(text)),True,True)
-            if rr:
-                if rr["kind"]!="special" or level(update.effective_chat.id,update.effective_user.id)>=RANKS["مميز"]:
+            rows=q("""SELECT value,kind FROM replies
+                      WHERE chat_id IN (?,0) AND key=?
+                      ORDER BY CASE kind
+                      WHEN 'special' THEN 0
+                      WHEN 'normal' THEN 1
+                      WHEN 'multi' THEN 2
+                      WHEN 'global' THEN 3 END""",
+                   (update.effective_chat.id,clean_key(text)),True)
+            lv = await rank_level(update.effective_chat.id, update.effective_user.id, update.get_bot())
+            for rr in rows:
+                if rr["kind"] != "special" or lv >= RANKS["مميز"]:
                     await m.reply_text(rr["value"])
+                    break
 
 # ---------------- Callback buttons ----------------
 
