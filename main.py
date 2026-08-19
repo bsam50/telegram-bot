@@ -1,15 +1,15 @@
+import json
 import os
 import re
-import sqlite3
-import random
-import time
+import logging
+from datetime import datetime, timedelta
+from functools import wraps
 
-from dotenv import load_dotenv
 from telegram import (
     Update,
-    ChatPermissions,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ChatPermissions,
 )
 from telegram.constants import ChatMemberStatus
 from telegram.ext import (
@@ -18,29 +18,144 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     ContextTypes,
+    ChatMemberHandler,
     filters,
 )
 
-load_dotenv()
+# ============================================================
+# إعدادات
+# ============================================================
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 
-DEV_IDS = {
-    int(x.strip())
-    for x in os.getenv("DEV_IDS", "").split(",")
-    if x.strip().isdigit()
+# يمكنك وضع آيدي المطور في Railway باسم DEV_ID
+try:
+    DEV_ID = int(os.getenv("DEV_ID", "0"))
+except ValueError:
+    DEV_ID = 0
+
+DATA_FILE = "bot_data.json"
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# قاعدة البيانات البسيطة
+# ============================================================
+
+DEFAULT_DATA = {
+    "users": {},
+    "groups": {},
+    "global_ban": [],
+    "global_mute": [],
+    "global_ranks": {},
 }
 
-if OWNER_ID:
-    DEV_IDS.add(OWNER_ID)
 
-DB = "bot_data.db"
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return DEFAULT_DATA.copy()
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        for key, value in DEFAULT_DATA.items():
+            if key not in data:
+                data[key] = value
+
+        return data
+
+    except Exception as e:
+        logger.error("فشل تحميل البيانات: %s", e)
+        return DEFAULT_DATA.copy()
 
 
-# =========================================================
-# الرتب
-# =========================================================
+DATA = load_data()
+
+
+def save_data():
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(DATA, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error("فشل حفظ البيانات: %s", e)
+
+
+# ============================================================
+# أدوات عامة
+# ============================================================
+
+def get_group(chat_id):
+    key = str(chat_id)
+
+    if key not in DATA["groups"]:
+        DATA["groups"][key] = {
+            "owners": [],
+            "main_owners": [],
+            "creators": [],
+            "managers": [],
+            "admins": [],
+            "vips": [],
+            "banned": [],
+            "muted": [],
+            "rules": "لم يتم تعيين القوانين بعد.",
+            "welcome": True,
+            "welcome_text": "أهلًا بك {name} في {title} ❤️",
+            "link": "",
+            "replies": {},
+            "special_replies": {},
+            "multi_replies": {},
+            "locks": {},
+            "channels": [],
+            "settings": {},
+        }
+        save_data()
+
+    return DATA["groups"][key]
+
+
+def user_id(update):
+    if update.effective_user:
+        return update.effective_user.id
+    return 0
+
+
+def is_dev(update):
+    return user_id(update) == DEV_ID and DEV_ID != 0
+
+
+def normalize(text):
+    if not text:
+        return ""
+
+    return (
+        text.strip()
+        .replace("أ", "ا")
+        .replace("إ", "ا")
+        .replace("آ", "ا")
+        .replace("ى", "ي")
+    )
+
+
+async def send(update, text, **kwargs):
+    if update.message:
+        return await update.message.reply_text(text, **kwargs)
+
+    if update.callback_query:
+        return await update.callback_query.message.reply_text(text, **kwargs)
+
+    return None
+
+
+# ============================================================
+# نظام الرتب
+# ============================================================
 
 RANKS = {
     "عضو": 0,
@@ -50,845 +165,759 @@ RANKS = {
     "منشئ": 4,
     "مالك": 5,
     "مالك اساسي": 6,
-}
-
-ALIASES = {
-    "الأدمن": "ادمن",
-    "الادمن": "ادمن",
-    "المالك": "مالك",
-    "المالك الأساسي": "مالك اساسي",
-    "المالك الاساسي": "مالك اساسي",
+    "مطوّر": 7,
 }
 
 
-# =========================================================
-# القفل
-# =========================================================
+def get_rank(chat_id, uid):
+    if uid == DEV_ID and DEV_ID != 0:
+        return "مطوّر"
 
-LOCKS = [
-    "جمثون",
-    "السب",
-    "الايرانيه",
-    "الكتابة",
-    "الاباحي",
-    "تعديل الميديا",
-    "التعديل",
-    "الفيديو",
-    "الصور",
-    "الملصقات",
-    "المتحركه",
-    "الدردشه",
-    "الروابط",
-    "التاك",
-    "البوتات",
-    "المعرفات",
-    "الكلايش",
-    "التكرار",
-    "التوجيه",
-    "الانلاين",
-    "الجهات",
-    "الدخول",
-    "الصوت",
-    "الفويس",
-    "التوجيه بالتقييد",
-    "الروابط بالتقييد",
-    "المتحركه بالتقييد",
-    "الصور بالتقييد",
-    "الفيديو بالتقييد",
-]
+    group = get_group(chat_id)
+    sid = str(uid)
+
+    if sid in map(str, group["main_owners"]):
+        return "مالك اساسي"
+
+    if sid in map(str, group["owners"]):
+        return "مالك"
+
+    if sid in map(str, group["creators"]):
+        return "منشئ"
+
+    if sid in map(str, group["managers"]):
+        return "مدير"
+
+    if sid in map(str, group["admins"]):
+        return "ادمن"
+
+    if sid in map(str, group["vips"]):
+        return "مميز"
+
+    return "عضو"
 
 
-FEATURES = [
-    "ضافني",
-    "الاذكار",
-    "الثنائي",
-    "افتاري",
-    "التسليه",
-    "الكت",
-    "الترحيب",
-    "الردود",
-    "الانذار",
-    "التحذير",
-    "الايدي",
-    "الرابط",
-    "اطردني",
-    "الحظر",
-    "الرفع",
-    "التنزيل",
-    "التحويل",
-    "الحمايه",
-    "المنشن",
-    "وضع الاقتباسات",
-    "الخدميه",
-    "اليوتيوب",
-    "الايدي بالصوره",
-    "التحقق",
-    "ردود السورس",
-    "ردود MY",
-    "الاحصائيات",
-]
+def rank_level(rank):
+    return RANKS.get(normalize(rank), 0)
 
 
-# =========================================================
-# قاعدة البيانات
-# =========================================================
-
-def DBconn():
-    c = sqlite3.connect(DB)
-
-    c.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users(
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            name TEXT,
-            first_seen INTEGER,
-            last_seen INTEGER
-        );
-
-        CREATE TABLE IF NOT EXISTS ranks(
-            chat INTEGER,
-            user INTEGER,
-            rank TEXT,
-            PRIMARY KEY(chat,user)
-        );
-
-        CREATE TABLE IF NOT EXISTS settings(
-            chat INTEGER,
-            key TEXT,
-            value TEXT,
-            PRIMARY KEY(chat,key)
-        );
-
-        CREATE TABLE IF NOT EXISTS replies(
-            chat INTEGER,
-            key TEXT,
-            value TEXT,
-            PRIMARY KEY(chat,key)
-        );
-
-        CREATE TABLE IF NOT EXISTS multi(
-            chat INTEGER,
-            key TEXT,
-            value TEXT,
-            PRIMARY KEY(chat,key)
-        );
-
-        CREATE TABLE IF NOT EXISTS special(
-            chat INTEGER,
-            key TEXT,
-            value TEXT,
-            PRIMARY KEY(chat,key)
-        );
-
-        CREATE TABLE IF NOT EXISTS global_replies(
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS global_multi(
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS global_special(
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS games(
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS warnings(
-            chat INTEGER,
-            user INTEGER,
-            count INTEGER,
-            PRIMARY KEY(chat,user)
-        );
-
-        CREATE TABLE IF NOT EXISTS global_bans(
-            user INTEGER PRIMARY KEY
-        );
-
-        CREATE TABLE IF NOT EXISTS global_mutes(
-            user INTEGER PRIMARY KEY
-        );
-
-        CREATE TABLE IF NOT EXISTS whispers(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat INTEGER,
-            sender INTEGER,
-            text TEXT,
-            created INTEGER
-        );
-
-        CREATE TABLE IF NOT EXISTS pending_whispers(
-            user INTEGER PRIMARY KEY,
-            chat INTEGER,
-            created INTEGER
-        );
-
-        CREATE TABLE IF NOT EXISTS money(
-            chat INTEGER,
-            user INTEGER,
-            coins INTEGER,
-            bank INTEGER,
-            PRIMARY KEY(chat,user)
-        );
-
-        CREATE TABLE IF NOT EXISTS marriages(
-            chat INTEGER,
-            user1 INTEGER,
-            user2 INTEGER,
-            PRIMARY KEY(chat,user1)
-        );
-
-        CREATE TABLE IF NOT EXISTS fun(
-            chat INTEGER,
-            user INTEGER,
-            kind TEXT,
-            PRIMARY KEY(chat,user,kind)
-        );
-        """
-    )
-
-    c.commit()
-    return c
+def can_manage(chat_id, uid):
+    return rank_level(get_rank(chat_id, uid)) >= RANKS["ادمن"]
 
 
-DBconn().close()
+def can_promote(chat_id, uid):
+    return rank_level(get_rank(chat_id, uid)) >= RANKS["مدير"]
 
 
-# =========================================================
-# أدوات قاعدة البيانات
-# =========================================================
-
-def one(sql, args=()):
-    c = DBconn()
-    result = c.execute(sql, args).fetchone()
-    c.close()
-    return result
+def can_owner(chat_id, uid):
+    return rank_level(get_rank(chat_id, uid)) >= RANKS["مالك"]
 
 
-def many(sql, args=()):
-    c = DBconn()
-    result = c.execute(sql, args).fetchall()
-    c.close()
-    return result
+async def require_group(update, context):
+    if not update.effective_chat or update.effective_chat.type == "private":
+        await send(update, "هذا الأمر يعمل داخل المجموعات فقط.")
+        return False
+    return True
 
 
-def put(sql, args=()):
-    c = DBconn()
-    c.execute(sql, args)
-    c.commit()
-    c.close()
+# ============================================================
+# حفظ دخول المستخدم
+# ============================================================
 
+async def remember_user(update, context):
+    user = update.effective_user
 
-def setv(chat, key, value):
-    put(
-        "INSERT OR REPLACE INTO settings(chat,key,value) VALUES(?,?,?)",
-        (chat, key, str(value)),
-    )
-
-
-def getv(chat, key, default="0"):
-    result = one(
-        "SELECT value FROM settings WHERE chat=? AND key=?",
-        (chat, key),
-    )
-    return result[0] if result else default
-
-
-def save_user(user):
     if not user:
         return
 
-    now = int(time.time())
+    uid = str(user.id)
 
-    old = one(
-        "SELECT user_id FROM users WHERE user_id=?",
-        (user.id,),
-    )
+    DATA["users"][uid] = {
+        "id": user.id,
+        "username": user.username or "",
+        "name": user.full_name,
+        "last_seen": datetime.utcnow().isoformat(),
+    }
 
-    if old:
-        put(
-            """
-            UPDATE users
-            SET username=?, name=?, last_seen=?
-            WHERE user_id=?
-            """,
-            (
-                user.username or "",
-                user.full_name or "",
-                now,
-                user.id,
-            ),
+    save_data()
+
+
+# ============================================================
+# START
+# ============================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await remember_user(update, context)
+
+    user = update.effective_user
+
+    if update.effective_chat.type == "private":
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "📚 أوامر البوت",
+                    callback_data="commands",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👨‍💻 المطور",
+                    callback_data="developer",
+                )
+            ],
+        ]
+
+        text = (
+            f"مرحبًا {user.first_name} ❤️\n\n"
+            "أنا بوت لينا 🤖\n"
+            "بوت إدارة وحماية وترفيه للمجموعات.\n\n"
+            "أستطيع مساعدتك في:\n"
+            "• إدارة المجموعة والصلاحيات\n"
+            "• الحظر والكتم والطرد\n"
+            "• الردود العامة والمميزة\n"
+            "• الهمسات\n"
+            "• الترحيب والقوانين\n"
+            "• القفل والفتح\n"
+            "• الألعاب والترفيه\n"
+            "• الخدمات والأوامر المختلفة\n\n"
+            "اضغط على «أوامر البوت» لرؤية القائمة."
         )
+
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
     else:
-        put(
-            """
-            INSERT INTO users
-            (user_id,username,name,first_seen,last_seen)
-            VALUES(?,?,?,?,?)
-            """,
-            (
-                user.id,
-                user.username or "",
-                user.full_name or "",
-                now,
-                now,
-            ),
+        await update.message.reply_text(
+            f"أهلًا {user.first_name} ❤️\n"
+            "أنا بوت لينا لحماية وإدارة المجموعة."
         )
 
 
-def getrank(chat, user):
-    result = one(
-        "SELECT rank FROM ranks WHERE chat=? AND user=?",
-        (chat, user),
+# ============================================================
+# قائمة الأوامر
+# ============================================================
+
+COMMANDS_TEXT = """
+🤖 أوامر بوت لينا
+
+━━━ 👑 الإدارة ━━━
+
+رتبتي
+معلوماتي
+رفع مميز
+تنزيل مميز
+رفع ادمن
+تنزيل ادمن
+رفع مدير
+تنزيل مدير
+رفع منشئ
+تنزيل منشئ
+رفع مالك
+تنزيل مالك
+
+━━━ 🛡️ الحماية ━━━
+
+حظر
+فك حظر
+طرد
+كتم
+فك كتم
+تقييد
+تحذير
+مسح
+المحظورين
+المكتومين
+
+━━━ 🔒 القفل والفتح ━━━
+
+قفل الروابط
+فتح الروابط
+قفل الصور
+فتح الصور
+قفل الفيديو
+فتح الفيديو
+قفل الصوت
+فتح الصوت
+قفل الملصقات
+فتح الملصقات
+قفل المتحركة
+فتح المتحركة
+قفل المنشن
+فتح المنشن
+قفل التاك
+فتح التاك
+قفل البوتات
+فتح البوتات
+قفل التوجيه
+فتح التوجيه
+قفل التعديل
+فتح التعديل
+قفل الكتابة
+فتح الكتابة
+قفل الكل
+فتح الكل
+
+━━━ 💬 الردود ━━━
+
+اضف رد
+اضف رد عام
+اضف رد مميز
+اضف رد متعدد
+حذف رد
+حذف رد عام
+حذف رد مميز
+الردود
+الردود العامة
+الردود المميزة
+
+━━━ ⚙️ الإعدادات ━━━
+
+الرابط
+ضع رابط
+حذف الرابط
+القوانين
+ضع قوانين
+الترحيب
+ضع ترحيب
+حذف الترحيب
+ايدي المجموعة
+معلومات المجموعة
+الاعدادات
+
+━━━ 💌 الهمسات ━━━
+
+اهمس
+همسة
+
+━━━ 🎮 الترفيه ━━━
+
+نسبة الحب
+تحبه
+هطف
+بثر
+حمار
+زواج
+طلاق
+
+━━━ 👨‍💻 المطور ━━━
+
+لوحة المطور
+احصائيات
+اذاعة
+اضف رد للمطور
+حذف رد للمطور
+اضف لعبة
+حذف لعبة
+تفعيل الردود
+تعطيل الردود
+حظر عام
+فك حظر عام
+كتم عام
+فك كتم عام
+"""
+
+
+async def commands(update, context):
+    await send(update, COMMANDS_TEXT)
+
+
+# ============================================================
+# معلومات المستخدم ورتبته
+# ============================================================
+
+async def my_rank(update, context):
+    if not await require_group(update, context):
+        return
+
+    uid = user_id(update)
+    chat_id = update.effective_chat.id
+    rank = get_rank(chat_id, uid)
+
+    await send(
+        update,
+        f"👤 الاسم: {update.effective_user.full_name}\n"
+        f"🆔 الآيدي: `{uid}`\n"
+        f"🎖️ رتبتك: **{rank}**",
+        parse_mode="Markdown",
     )
-    return result[0] if result else "عضو"
 
 
-def isdev(user_id):
-    return user_id in DEV_IDS
+async def my_info(update, context):
+    if not await require_group(update, context):
+        return
 
-
-# =========================================================
-# الصلاحيات
-# =========================================================
-
-async def is_admin(update, context):
-    try:
-        member = await context.bot.get_chat_member(
-            update.effective_chat.id,
-            update.effective_user.id,
-        )
-
-        return member.status in (
-            ChatMemberStatus.ADMINISTRATOR,
-            ChatMemberStatus.OWNER,
-        )
-
-    except Exception:
-        return False
-
-
-async def can(update, context, needed):
-    user_id = update.effective_user.id
+    uid = user_id(update)
     chat_id = update.effective_chat.id
 
-    if isdev(user_id):
-        return True
-
-    rank = getrank(chat_id, user_id)
-
-    if RANKS.get(rank, 0) >= needed:
-        return True
-
-    if needed <= 3:
-        return await is_admin(update, context)
-
-    return False
+    await send(
+        update,
+        f"👤 الاسم: {update.effective_user.full_name}\n"
+        f"🔹 المستخدم: @{update.effective_user.username or 'لا يوجد'}\n"
+        f"🆔 الآيدي: `{uid}`\n"
+        f"🎖️ الرتبة: {get_rank(chat_id, uid)}",
+        parse_mode="Markdown",
+    )
 
 
-def target(update):
-    if (
-        update.message
-        and update.message.reply_to_message
-        and update.message.reply_to_message.from_user
-    ):
+# ============================================================
+# استخراج المستخدم المستهدف
+# ============================================================
+
+async def get_target(update, context):
+    if update.message.reply_to_message:
         return update.message.reply_to_message.from_user
+
+    if context.args:
+        value = context.args[0]
+
+        if value.isdigit():
+            try:
+                member = await context.bot.get_chat_member(
+                    update.effective_chat.id,
+                    int(value),
+                )
+                return member.user
+            except Exception:
+                return None
+
+        username = value.lstrip("@")
+
+        try:
+            member = await context.bot.get_chat_member(
+                update.effective_chat.id,
+                username,
+            )
+            return member.user
+        except Exception:
+            return None
 
     return None
 
 
-async def say(update, text, **kwargs):
-    return await update.message.reply_text(text, **kwargs)
+# ============================================================
+# الرتب
+# ============================================================
 
+async def promote(update, context, rank_name):
+    if not await require_group(update, context):
+        return
 
-# =========================================================
-# القوائم
-# =========================================================
+    chat_id = update.effective_chat.id
+    uid = user_id(update)
 
-def menu():
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("👑 م1 الإدارة", callback_data="m1"),
-                InlineKeyboardButton("⚙️ م2 الإعدادات", callback_data="m2"),
-            ],
-            [
-                InlineKeyboardButton("🔒 م3 القفل والفتح", callback_data="m3"),
-                InlineKeyboardButton("🎮 م4 التسلية", callback_data="m4"),
-            ],
-            [
-                InlineKeyboardButton("👨‍💻 م5 المطور", callback_data="m5"),
-                InlineKeyboardButton("🛠️ م6 الخدمات", callback_data="m6"),
-            ],
-        ]
+    if not can_promote(chat_id, uid):
+        await send(update, "❌ ليس لديك صلاحية استخدام هذا الأمر.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو أو اكتب آيديه.")
+        return
+
+    group = get_group(chat_id)
+    tid = target.id
+
+    lists = {
+        "مميز": "vips",
+        "ادمن": "admins",
+        "مدير": "managers",
+        "منشئ": "creators",
+        "مالك": "owners",
+        "مالك اساسي": "main_owners",
+    }
+
+    key = lists[rank_name]
+
+    for other_key in lists.values():
+        if tid in group[other_key] and other_key != key:
+            group[other_key].remove(tid)
+
+    if tid not in group[key]:
+        group[key].append(tid)
+
+    save_data()
+
+    await send(
+        update,
+        f"✅ تم رفع {target.full_name} إلى رتبة **{rank_name}**.",
+        parse_mode="Markdown",
     )
 
 
-MENUS = {
-    "m1": """
-👑 م1 الإدارة
+async def demote(update, context, rank_name):
+    if not await require_group(update, context):
+        return
 
-• رتبتي
-• معلوماتي
-• الرتب
-• المالك
-• رفع مميز
-• رفع ادمن
-• رفع مدير
-• رفع منشئ
-• رفع مالك
-• رفع مالك اساسي
-• تنزيل
-• حظر
-• طرد
-• كتم
-• فك الحظر
-• فك الكتم
-""",
+    chat_id = update.effective_chat.id
+    uid = user_id(update)
 
-    "m2": """
-⚙️ م2 الإعدادات
+    if not can_promote(chat_id, uid):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
 
-• الرابط
-• القوانين
-• الترحيب
-• الردود
-• الردود المميزة
-• الردود المتعددة
-• إضافة رد
-• إضافة رد مميز
-• إضافة رد متعدد
-""",
+    target = await get_target(update, context)
 
-    "m3": """
-🔒 م3 القفل والفتح
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
 
-• قفل الروابط
-• فتح الروابط
-• قفل الصور
-• فتح الصور
-• قفل الفيديو
-• فتح الفيديو
-• قفل الملصقات
-• فتح الملصقات
-• قفل المتحركة
-• فتح المتحركة
-• قفل الكل
-• فتح الكل
+    group = get_group(chat_id)
 
-⚙️ التفعيل والتعطيل
+    lists = {
+        "مميز": "vips",
+        "ادمن": "admins",
+        "مدير": "managers",
+        "منشئ": "creators",
+        "مالك": "owners",
+        "مالك اساسي": "main_owners",
+    }
 
-• تفعيل الترحيب
-• تعطيل الترحيب
-• تفعيل الردود
-• تعطيل الردود
-• تفعيل الحماية
-• تعطيل الحماية
-""",
+    key = lists[rank_name]
 
-    "m4": """
-🎮 م4 التسلية
+    if target.id in group[key]:
+        group[key].remove(target.id)
 
-• نسبة الحب
-• بنك
-• رصيدي
-• راتب
-• ايداع
-• سحب
-• ألعاب
-""",
+    save_data()
 
-    "m5": """
-👨‍💻 م5 المطور
-
-• إضافة رد عام
-• إضافة رد مميز
-• إضافة رد متعدد عام
-• حذف رد عام
-• حذف رد مميز
-• حذف رد متعدد عام
-• الردود العامة
-• الردود المميزة
-• الردود المتعددة العامة
-• إضافة لعبة
-• حذف لعبة
-• الألعاب
-• الإحصائيات
-""",
-
-    "m6": """
-🛠️ م6 الخدمات
-
-• آيدي
-• معلوماتي
-• قرآن
-• أذكار
-• اقتباسات
-• همسة
-""",
-}
+    await send(
+        update,
+        f"✅ تم تنزيل رتبة {target.full_name}.",
+    )
 
 
-# =========================================================
-# START
-# =========================================================
+# ============================================================
+# الحظر والطرد والكتم
+# ============================================================
 
-async def start(update, context):
-    save_user(update.effective_user)
+async def ban(update, context):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not can_manage(chat_id, user_id(update)):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
+
+    try:
+        await context.bot.ban_chat_member(
+            chat_id,
+            target.id,
+        )
+
+        group = get_group(chat_id)
+
+        if target.id not in group["banned"]:
+            group["banned"].append(target.id)
+
+        save_data()
+
+        await send(
+            update,
+            f"🚫 تم حظر {target.full_name}.",
+        )
+
+    except Exception as e:
+        logger.error(e)
+        await send(update, "❌ لا أستطيع حظر العضو. تأكد أن البوت مشرف.")
+
+
+async def unban(update, context):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not can_manage(chat_id, user_id(update)):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
+
+    try:
+        await context.bot.unban_chat_member(
+            chat_id,
+            target.id,
+            only_if_banned=True,
+        )
+
+        group = get_group(chat_id)
+
+        if target.id in group["banned"]:
+            group["banned"].remove(target.id)
+
+        save_data()
+
+        await send(update, "✅ تم فك الحظر.")
+
+    except Exception:
+        await send(update, "❌ حدث خطأ أثناء فك الحظر.")
+
+
+async def kick(update, context):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not can_manage(chat_id, user_id(update)):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
+
+    try:
+        await context.bot.ban_chat_member(chat_id, target.id)
+        await context.bot.unban_chat_member(chat_id, target.id)
+
+        await send(
+            update,
+            f"👢 تم طرد {target.full_name}.",
+        )
+
+    except Exception:
+        await send(update, "❌ لم أستطع طرد العضو.")
+
+
+async def mute(update, context):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not can_manage(chat_id, user_id(update)):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
+
+    permissions = ChatPermissions(can_send_messages=False)
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id,
+            target.id,
+            permissions=permissions,
+        )
+
+        group = get_group(chat_id)
+
+        if target.id not in group["muted"]:
+            group["muted"].append(target.id)
+
+        save_data()
+
+        await send(
+            update,
+            f"🔇 تم كتم {target.full_name}.",
+        )
+
+    except Exception:
+        await send(update, "❌ تأكد أن البوت مشرف ولديه صلاحية التقييد.")
+
+
+async def unmute(update, context):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not can_manage(chat_id, user_id(update)):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    target = await get_target(update, context)
+
+    if not target:
+        await send(update, "❌ قم بالرد على العضو.")
+        return
+
+    permissions = ChatPermissions(
+        can_send_messages=True,
+        can_send_audios=True,
+        can_send_documents=True,
+        can_send_photos=True,
+        can_send_videos=True,
+        can_send_video_notes=True,
+        can_send_voice_notes=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
+
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id,
+            target.id,
+            permissions=permissions,
+        )
+
+        group = get_group(chat_id)
+
+        if target.id in group["muted"]:
+            group["muted"].remove(target.id)
+
+        save_data()
+
+        await send(update, "🔊 تم فك الكتم.")
+
+    except Exception:
+        await send(update, "❌ حدث خطأ.")
+
+
+# ============================================================
+# الردود
+# ============================================================
+
+async def add_reply(update, context, reply_type="normal"):
+    if not await require_group(update, context):
+        return
+
+    chat_id = update.effective_chat.id
+    uid = user_id(update)
+
+    if not can_manage(chat_id, uid):
+        await send(update, "❌ تحتاج إلى رتبة إدارية لإضافة رد.")
+        return
+
+    if len(context.args) < 2:
+        await send(
+            update,
+            "الاستخدام:\n"
+            "اضف رد الكلمة الرد\n\n"
+            "مثال:\n"
+            "اضف رد هلا هلا والله ❤️",
+        )
+        return
+
+    keyword = context.args[0].strip()
+    response = " ".join(context.args[1:]).strip()
+
+    group = get_group(chat_id)
+
+    if reply_type == "normal":
+        group["replies"][keyword] = response
+        title = "الرد"
+
+    elif reply_type == "special":
+        group["special_replies"][keyword] = response
+        title = "الرد المميز"
+
+    else:
+        group["multi_replies"][keyword] = response
+        title = "الرد المتعدد"
+
+    save_data()
+
+    await send(
+        update,
+        f"✅ تم حفظ {title}:\n"
+        f"الكلمة: {keyword}\n"
+        f"الرد: {response}",
+    )
+
+
+async def delete_reply(update, context):
+    if not await require_group(update, context):
+        return
+
+    if not can_manage(
+        update.effective_chat.id,
+        user_id(update),
+    ):
+        await send(update, "❌ ليس لديك صلاحية.")
+        return
+
+    if not context.args:
+        await send(update, "اكتب كلمة الرد التي تريد حذفها.")
+        return
+
+    keyword = context.args[0]
+    group = get_group(update.effective_chat.id)
+
+    deleted = False
+
+    for key in [
+        "replies",
+        "special_replies",
+        "multi_replies",
+    ]:
+        if keyword in group[key]:
+            del group[key][keyword]
+            deleted = True
+
+    save_data()
+
+    if deleted:
+        await send(update, f"✅ تم حذف الرد: {keyword}")
+    else:
+        await send(update, "❌ الرد غير موجود.")
+
+
+async def show_replies(update, context):
+    if not await require_group(update, context):
+        return
+
+    group = get_group(update.effective_chat.id)
+
+    lines = ["💬 الردود الموجودة:\n"]
+
+    if group["replies"]:
+        lines.append("━━ الردود العادية ━━")
+        for key in group["replies"]:
+            lines.append(f"• {key}")
+
+    if group["special_replies"]:
+        lines.append("\n━━ الردود المميزة ━━")
+        for key in group["special_replies"]:
+            lines.append(f"• {key}")
+
+    if group["multi_replies"]:
+        lines.append("\n━━ الردود المتعددة ━━")
+        for key in group["multi_replies"]:
+            lines.append(f"• {key}")
+
+    if len(lines) == 1:
+        lines.append("لا توجد ردود.")
+
+    await send(update, "\n".join(lines))
+
+
+# ============================================================
+# معالجة الردود تلقائيًا
+# ============================================================
+
+async def automatic_replies(update, context):
+    if not update.message or not update.message.text:
+        return
+
+    await remember_user(update, context)
 
     chat = update.effective_chat
 
-    # -----------------------------------------
-    # خاص البوت
-    # -----------------------------------------
-
-    if chat.type == "private":
-
-        args = context.args
-
-        # رابط الهمسة
-        if args and args[0].startswith("whisper_"):
-            try:
-                group_id = int(args[0].replace("whisper_", ""))
-
-                put(
-                    """
-                    INSERT OR REPLACE INTO pending_whispers
-                    (user,chat,created)
-                    VALUES(?,?,?)
-                    """,
-                    (
-                        update.effective_user.id,
-                        group_id,
-                        int(time.time()),
-                    ),
-                )
-
-                await update.message.reply_text(
-                    "💌 تم فتح الهمسة.\n\n"
-                    "أرسل الآن الكلام الذي تريد إرساله للمجموعة.\n"
-                    "سيتم نشره في المجموعة كـ **همسة مجهولة**."
-                )
-
-                return
-
-            except Exception:
-                pass
-
-        if isdev(update.effective_user.id):
-            return await dev_panel(update)
-
-        await update.message.reply_text(
-            "👋 أهلاً بك في **بوت لينا** 🌷\n\n"
-            "🤖 أنا بوت إدارة وترفيه للمجموعات.\n\n"
-            "أستطيع مساعدتك في:\n"
-            "• إدارة المجموعة والصلاحيات\n"
-            "• الردود التلقائية\n"
-            "• الردود المميزة والمتعددة\n"
-            "• القفل والحماية\n"
-            "• الألعاب والتسلية\n"
-            "• الهمسات\n"
-            "• الخدمات المختلفة\n\n"
-            "أضفني إلى مجموعتك وامنحني الصلاحيات المناسبة للاستفادة من الميزات."
-        )
-
+    if not chat:
         return
 
-    # -----------------------------------------
-    # المجموعة
-    # -----------------------------------------
-
-    rank = getrank(
-        chat.id,
-        update.effective_user.id,
-    )
-
-    if rank == "عضو" and not await is_admin(update, context):
-        return await update.message.reply_text(
-            "👋 أهلاً بك.\n"
-            "الأوامر الإدارية تظهر فقط لأصحاب الرتب."
-        )
-
-    await update.message.reply_text(
-        "👋 أهلاً بك في بوت لينا.\n\n"
-        "اختر القائمة:",
-        reply_markup=menu(),
-    )
-
-
-# =========================================================
-# لوحة المطور
-# =========================================================
-
-async def dev_panel(update):
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "➕ رد عام",
-                    callback_data="dev_add_global",
-                ),
-                InlineKeyboardButton(
-                    "⭐ رد مميز",
-                    callback_data="dev_add_special",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "💬 رد متعدد عام",
-                    callback_data="dev_add_multi",
-                ),
-                InlineKeyboardButton(
-                    "🎮 الألعاب",
-                    callback_data="dev_games",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "📋 الردود",
-                    callback_data="dev_lists",
-                ),
-                InlineKeyboardButton(
-                    "📊 الإحصائيات",
-                    callback_data="dev_stats",
-                ),
-            ],
-        ]
-    )
-
-    return await update.message.reply_text(
-        "👨‍💻 أهلاً بك عزيزي المطور\n\n"
-        "من هنا تستطيع إدارة البوت والردود والألعاب والميزات.",
-        reply_markup=keyboard,
-    )
-
-
-# =========================================================
-# أزرار القوائم
-# =========================================================
-
-async def callbacks(update, context):
-    query = update.callback_query
-
-    await query.answer()
-
-    data = query.data
-
-    if data == "home":
-        return await query.edit_message_text(
-            "اختر القائمة:",
-            reply_markup=menu(),
-        )
-
-    if data in MENUS:
-        return await query.edit_message_text(
-            MENUS[data],
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "↩️ رجوع",
-                            callback_data="home",
-                        )
-                    ]
-                ]
-            ),
-        )
-
-    # لوحة المطور
-    if data.startswith("dev_"):
-
-        if not isdev(update.effective_user.id):
-            return
-
-        if data == "dev_home":
-            return await query.edit_message_text(
-                "👨‍💻 لوحة المطور",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "➕ رد عام",
-                                callback_data="dev_add_global",
-                            ),
-                            InlineKeyboardButton(
-                                "⭐ رد مميز",
-                                callback_data="dev_add_special",
-                            ),
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                "💬 رد متعدد عام",
-                                callback_data="dev_add_multi",
-                            ),
-                        ],
-                    ]
-                ),
-            )
-
-        if data == "dev_add_global":
-            return await query.edit_message_text(
-                "➕ إضافة رد عام\n\n"
-                "أرسل الرسالة التي تريد أن تكون ردًا.\n"
-                "ثم اعمل لها رد واكتب:\n\n"
-                "اضف رد عام الكلمة"
-            )
-
-        if data == "dev_add_special":
-            return await query.edit_message_text(
-                "⭐ إضافة رد مميز\n\n"
-                "اعمل ردًا على الرسالة التي تريد حفظها ثم اكتب:\n\n"
-                "اضف رد مميز الكلمة"
-            )
-
-        if data == "dev_add_multi":
-            return await query.edit_message_text(
-                "💬 إضافة رد متعدد عام\n\n"
-                "اعمل ردًا على الرسالة ثم اكتب:\n\n"
-                "اضف رد متعدد عام الكلمة"
-            )
-
-        if data == "dev_games":
-            return await query.edit_message_text(
-                "🎮 الألعاب\n\n"
-                "إضافة لعبة:\n"
-                "اضف لعبة اسم اللعبة | نص اللعبة\n\n"
-                "حذف لعبة:\n"
-                "مسح لعبة اسم اللعبة\n\n"
-                "عرض الألعاب:\n"
-                "الالعاب"
-            )
-
-        if data == "dev_lists":
-
-            general = many(
-                "SELECT key FROM global_replies ORDER BY key"
-            )
-
-            special = many(
-                "SELECT key FROM global_special ORDER BY key"
-            )
-
-            multi = many(
-                "SELECT key FROM global_multi ORDER BY key"
-            )
-
-            text = "📋 الردود العامة:\n"
-
-            text += (
-                "\n".join("• " + x[0] for x in general)
-                if general
-                else "لا توجد"
-            )
-
-            text += "\n\n⭐ الردود المميزة:\n"
-
-            text += (
-                "\n".join("• " + x[0] for x in special)
-                if special
-                else "لا توجد"
-            )
-
-            text += "\n\n💬 الردود المتعددة:\n"
-
-            text += (
-                "\n".join("• " + x[0] for x in multi)
-                if multi
-                else "لا توجد"
-            )
-
-            return await query.edit_message_text(text)
-
-        if data == "dev_stats":
-
-            users = one(
-                "SELECT COUNT(*) FROM users"
-            )[0]
-
-            general = one(
-                "SELECT COUNT(*) FROM global_replies"
-            )[0]
-
-            special = one(
-                "SELECT COUNT(*) FROM global_special"
-            )[0]
-
-            multi = one(
-                "SELECT COUNT(*) FROM global_multi"
-            )[0]
-
-            games = one(
-                "SELECT COUNT(*) FROM games"
-            )[0]
-
-            return await query.edit_message_text(
-                "📊 إحصائيات البوت\n\n"
-                f"👥 المستخدمون: {users}\n"
-                f"💬 الردود العامة: {general}\n"
-                f"⭐ الردود المميزة: {special}\n"
-                f"🔄 الردود المتعددة: {multi}\n"
-                f"🎮 الألعاب: {games}"
-            )
-
-
-# =========================================================
-# المطور
-# =========================================================
-
-async def developer(update, context):
-
-    if not isdev(update.effective_user.id):
-        return await say(
-            update,
-            "❌ هذا الأمر للمطور فقط.",
-        )
-
-    try:
-
-        user = await context.bot.get_chat(OWNER_ID)
-
-        username = (
-            "@" + user.username
-            if user.username
-            else "بدون يوزر"
-        )
-
-        text = (
-            "👨‍💻 المطور الأساسي\n\n"
-            f"👤 الاسم: {user.full_name}\n"
-            f"🔗 اليوزر: {username}\n"
-            f"🆔 الآيدي: {OWNER_ID}"
-        )
-
-        photos = await context.bot.get_user_profile_photos(
-            OWNER_ID,
-            limit=1,
-        )
-
-        if photos.total_count:
-
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "👨‍💻 لوحة المطور",
-                            callback_data="dev_home",
-                        )
-                    ]
-                ]
-            )
-
-            return await update.message.reply_photo(
-                photos.photos[0][-1].file_id,
-                caption=text,
-                reply_markup=keyboard,
-            )
-
-        return await say(u
+    # في الخاص لا نستخدم ردود المجموعة
+    if chat.type == "private
