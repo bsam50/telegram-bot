@@ -39,3 +39,12 @@ $contact = $messageData["contact"];
 $contact_id = $messageData["contact"]["file_id"];
 $photo = $messageData["photo"];
 $photo_id = $messageData["message"]["photo"][0]["file_id"];
+// تشغيل أوامر البوت
+if (isset($messageText) && is_string($messageText)) {
+    $command = trim(explode(" ", $messageText)[0]);
+    $command = str_replace("/", "", $command);
+
+    if (function_exists("command_" . $command)) {
+        call_user_func("command_" . $command);
+    }
+}
