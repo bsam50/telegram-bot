@@ -1,8 +1,8 @@
 <?php
-// ضع بيانات البوت هنا فقط
-$TOKEN = "PUT_BOT_TOKEN_HERE";
-$botUsername = "PUT_BOT_USERNAME_HERE"; // بدون @
-$sudoID = "PUT_DEVELOPER_ID_HERE";
+
+$TOKEN = "8937334713:AAHbK50bbjg7ryrYDM4K_SzrfRq7Yb8FICA";
+$botUsername = "ggguuiii_bot";
+$sudoID = "8476500086";
 
 date_default_timezone_set("Asia/Riyadh");
 
@@ -12,4 +12,5 @@ define("SUDO_ID", (string)$sudoID);
 define("DATA_DIR", __DIR__ . "/data");
 
 if (!is_dir(DATA_DIR)) mkdir(DATA_DIR, 0777, true);
+
 ?>
