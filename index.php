@@ -2,49 +2,38 @@
 require_once "config.php";
 require_once "util.php";
 
-foreach(glob("Plugins/*") as $plugin){
-    include_once $plugin;
+foreach (glob("Plugins/*.php") as $plugin) include_once $plugin;
+
+$raw=file_get_contents("php://input");
+if(!$raw) exit("Webhook OK");
+$u=json_decode($raw,true);
+if(!$u) exit;
+
+if(isset($u["callback_query"])) {
+    $cq=$u["callback_query"];
+    $m=$cq["message"]??[];
+    $chat=$m["chat"]["id"]??0; $mid=$m["message_id"]??0;
+    $uid=$cq["from"]["id"]??0; $data=$cq["data"]??"";
+    handleCallback($cq,$chat,$mid,$uid,$data);
+    exit;
 }
 
-$update = file_get_contents("php://input");
-//if this file accessed via browser or terminal(empty input), exit
-if(empty($update)){
-    exit("Error, don't open this file directly from your browser or terminal");
+$m=$u["message"]??null;
+if(!$m) exit;
+
+$chatId=$m["chat"]["id"];
+$type=$m["chat"]["type"];
+$from=$m["from"]??[];
+$fromId=$from["id"]??0;
+$text=$m["text"]??"";
+
+if(isGroup($type)) {
+    ensureChat($m);
+    moderateLocks($m);
 }
 
-$updateData = json_decode($update,true);
-$messageData = isset($updateData["callback_query"]) ? $updateData["callback_query"]["message"] : $updateData["message"];
-$messageTime = $messageData["date"];
-$chatId = $messageData["chat"]["id"];
-$messageId = $messageData["message_id"];
-$messageText = $messageData["text"];
-
-$data = $updateData["callback_query"]["data"];
-$from_id = $messageData["from"]["id"];
-$from_name = $messageData["from"]["first_name"] . $messageData["from"]["last_name"];
-$from_username = $messageData["from"]["username"];
-
-// media
-$sticker = $messageData["sticker"];
-$sticker_id = $messageData["sticker"]["file_id"];
-$voice = $messageData["voice"];
-$voice_id = $messageData["voice"]["file_id"];
-$file = $messageData["document"];
-$file_id = $messageData["document"]["file_id"];
-$audio = $messageData["audio"];
-$audio_id = $messageData["audio"]["file_id"];
-$video = $messageData["video"];
-$video_id = $messageData["video"]["file_id"];
-$contact = $messageData["contact"];
-$contact_id = $messageData["contact"]["file_id"];
-$photo = $messageData["photo"];
-$photo_id = $messageData["message"]["photo"][0]["file_id"];
-// تشغيل أوامر البوت
-if (isset($messageText) && is_string($messageText)) {
-    $command = trim(explode(" ", $messageText)[0]);
-    $command = str_replace("/", "", $command);
-
-    if (function_exists("command_" . $command)) {
-        call_user_func("command_" . $command);
-    }
+if($text!=="" && preg_match('/^[\/!#]([^\s@]+)/u',$text,$mm)) {
+    $command=commandAliases($mm[1]);
+    handleCommand($command,$m);
 }
+?>
